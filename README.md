@@ -1,138 +1,384 @@
-##ngx_lua_waf
+# ngx_lua_waf
 
-ngx_lua_waf是我刚入职趣游时候开发的一个基于ngx_lua的web应用防火墙。
+ngx_lua_waf 是一个基于 ngx_lua 的 Web 应用防火墙，使用简单、高性能、轻量级。
 
-代码很简单，开发初衷主要是使用简单，高性能和轻量级。
+## 功能特性
 
-现在开源出来，遵从MIT许可协议。其中包含我们的过滤规则。如果大家有什么建议和想fa，欢迎和我一起完善。
+- 防止 SQL 注入、本地包含、部分溢出、fuzzing 测试、XSS、SSRF 等 Web 攻击
+- 防止 svn/备份之类文件泄漏
+- 防止 ApacheBench 之类压力测试工具的攻击
+- 屏蔽常见的扫描黑客工具、扫描器
+- 屏蔽异常的网络请求
+- 屏蔽图片附件类目录 PHP 执行权限
+- 防止 webshell 上传
 
-###用途：
-    	
-	防止sql注入，本地包含，部分溢出，fuzzing测试，xss,SSRF等web攻击
-	防止svn/备份之类文件泄漏
-	防止ApacheBench之类压力测试工具的攻击
-	屏蔽常见的扫描黑客工具，扫描器
-	屏蔽异常的网络请求
-	屏蔽图片附件类目录php执行权限
-	防止webshell上传
+## 两种使用模式
 
-###推荐安装:
+### 模式一：原始文件模式（默认）
 
-推荐使用lujit2.1做lua支持
+使用本地文件存储配置和规则，适合单实例部署。
 
-ngx_lua如果是0.9.2以上版本，建议正则过滤函数改为ngx.re.find，匹配效率会提高三倍左右。
+### 模式二：Redis 集中存储模式（新增）
 
+使用 Redis 存储配置和规则，支持多实例共享、热更新。
 
-###使用说明：
+---
 
-nginx安装路径假设为:/usr/local/nginx/conf/
+## 快速开始（原始文件模式）
 
-把ngx_lua_waf下载到conf目录下,解压命名为waf
+### 1. 安装
 
-在nginx.conf的http段添加
+假设 Nginx 安装路径为 `/usr/local/nginx/conf/`：
 
-		lua_package_path "/usr/local/nginx/conf/waf/?.lua";
-        lua_shared_dict limit 10m;
-        init_by_lua_file  /usr/local/nginx/conf/waf/init.lua; 
-    	access_by_lua_file /usr/local/nginx/conf/waf/waf.lua;
+```bash
+cd /usr/local/nginx/conf
+git clone https://github.com/linorwang/ngx_lua_waf.git waf
+```
 
-配置config.lua里的waf规则目录(一般在waf/conf/目录下)
+### 2. 配置 nginx.conf
 
-        RulePath = "/usr/local/nginx/conf/waf/wafconf/"
+在 `http` 块中添加：
 
-绝对路径如有变动，需对应修改
+```nginx
+lua_package_path "/usr/local/nginx/conf/waf/?.lua";
+lua_shared_dict limit 10m;
+init_by_lua_file  /usr/local/nginx/conf/waf/init.lua;
+access_by_lua_file /usr/local/nginx/conf/waf/waf.lua;
+```
 
-然后重启nginx即可
+### 3. 配置 config.lua
 
+```lua
+RulePath = "/usr/local/nginx/conf/waf/wafconf/"
+attacklog = "on"
+logdir = "/usr/local/nginx/logs/hack/"
+UrlDeny = "on"
+Redirect = "on"
+CookieMatch = "on"
+postMatch = "on"
+whiteModule = "on"
+CCDeny = "off"
+CCrate = "100/60"
+```
 
-###配置文件详细说明：
+### 4. 创建日志目录
 
-    	RulePath = "/usr/local/nginx/conf/waf/wafconf/"
-        --规则存放目录
-        attacklog = "off"
-        --是否开启攻击信息记录，需要配置logdir
-        logdir = "/usr/local/nginx/logs/hack/"
-        --log存储目录，该目录需要用户自己新建，切需要nginx用户的可写权限
-        UrlDeny="on"
-        --是否拦截url访问
-        Redirect="on"
-        --是否拦截后重定向
-        CookieMatch = "on"
-        --是否拦截cookie攻击
-        postMatch = "on" 
-        --是否拦截post攻击
-        whiteModule = "on" 
-        --是否开启URL白名单
-        black_fileExt={"php","jsp"}
-        --填写不允许上传文件后缀类型
-        ipWhitelist={"127.0.0.1"}
-        --ip白名单，多个ip用逗号分隔
-        ipBlocklist={"1.0.0.1"}
-        --ip黑名单，多个ip用逗号分隔
-        CCDeny="on"
-        --是否开启拦截cc攻击(需要nginx.conf的http段增加lua_shared_dict limit 10m;)
-        CCrate = "100/60"
-        --设置cc攻击频率，单位为秒.
-        --默认1分钟同一个IP只能请求同一个地址100次
-        html=[[Please go away~~]]
-        --警告内容,可在中括号内自定义
-        备注:不要乱动双引号，区分大小写
-        
-###检查规则是否生效
+```bash
+mkdir -p /usr/local/nginx/logs/hack
+chown -R nginx:nginx /usr/local/nginx/logs/hack
+```
 
-部署完毕可以尝试如下命令：        
-  
-        curl http://xxxx/test.php?id=../etc/passwd
-        返回"Please go away~~"字样，说明规则生效。
+### 5. 重启 Nginx
 
-注意:默认，本机在白名单不过滤，可自行调整config.lua配置
+```bash
+nginx -t
+nginx -s reload
+```
 
+---
 
-###效果图如下：
+## 快速开始（Redis 模式）
 
-![sec](http://i.imgur.com/wTgOcm2.png)
+### 1. 前置条件
 
-![sec](http://i.imgur.com/DqU30au.png)
+- Redis 服务
+- lua-resty-redis 模块
 
-###规则更新：
+### 2. 配置 nginx.conf
 
-考虑到正则的缓存问题，动态规则会影响性能，所以暂没用共享内存字典和redis之类东西做动态管理。
+在 `http` 块中添加：
 
-规则更新可以把规则文件放置到其他服务器，通过crontab任务定时下载来更新规则，nginx reload即可生效。以保障ngx lua waf的高性能。
+```nginx
+lua_package_path "/usr/local/nginx/conf/waf/?.lua";
+lua_shared_dict limit 50m;
+lua_shared_dict waf_cache 10m;  # 新增，用于本地缓存
+init_by_lua_file  /usr/local/nginx/conf/waf/init.lua;
+access_by_lua_file /usr/local/nginx/conf/waf/waf.lua;
+```
 
-只记录过滤日志，不开启过滤，在代码里在check前面加上--注释即可，如果需要过滤，反之
+### 3. 配置 config.lua
 
-###一些说明：
+```lua
+-- ==================== Redis 连接配置 ====================
+use_redis = true  -- 启用 Redis 版本
 
-	过滤规则在wafconf下，可根据需求自行调整，每条规则需换行,或者用|分割
-	
-		args里面的规则get参数进行过滤的
-		url是只在get请求url过滤的规则		
-		post是只在post请求过滤的规则		
-		whitelist是白名单，里面的url匹配到不做过滤		
-		user-agent是对user-agent的过滤规则
-	
+redis_host = "127.0.0.1"
+redis_port = 6379
+redis_username = nil  -- Redis 6.0+ ACL 用户名，没有则设为 nil
+redis_password = nil  -- 密码，没有则设为 nil
+redis_timeout = 1000  -- 毫秒
+redis_pool_size = 100
+redis_idle_timeout = 10000  -- 毫秒
 
-	默认开启了get和post过滤，需要开启cookie过滤的，编辑waf.lua取消部分--注释即可
-	
-	日志文件名称格式如下:虚拟主机名_sec.log
+-- ==================== 本地缓存配置 ====================
+cache_ttl = 5  -- 秒，本地缓存过期时间
+enable_cache = true  -- 是否启用本地缓存
+```
 
+#### Redis 认证方式说明
+
+| 认证方式 | redis_username | redis_password | 适用场景 |
+|---------|---------------|----------------|---------|
+| 无认证 | nil | nil | 本地测试环境 |
+| 仅密码 | nil | "your_password" | Redis 5.x 及以下 |
+| 用户名+密码 | "your_username" | "your_password" | Redis 6.0+ ACL |
+
+### 4. 初始化 Redis 数据
+
+使用 Python 脚本（推荐）：
+
+```bash
+cd /usr/local/nginx/conf/waf/admin
+pip install redis
+python3 init_redis.py
+```
+
+或使用 Lua 脚本（需要 luasocket）：
+
+```bash
+cd /usr/local/nginx/conf/waf/admin
+lua init_redis.lua
+```
+
+### 5. 重启 Nginx
+
+```bash
+nginx -t
+nginx -s reload
+```
+
+---
+
+## 配置说明
+
+### config.lua 配置项
+
+| 配置项 | 说明 |
+|--------|------|
+| `RulePath` | 规则存放目录（仅文件模式） |
+| `attacklog` | 是否开启攻击日志记录 |
+| `logdir` | 日志存储目录 |
+| `UrlDeny` | 是否拦截 URL 访问 |
+| `Redirect` | 是否拦截后重定向 |
+| `CookieMatch` | 是否拦截 Cookie 攻击 |
+| `postMatch` | 是否拦截 POST 攻击 |
+| `whiteModule` | 是否开启 URL 白名单 |
+| `black_fileExt` | 禁止上传的文件后缀 |
+| `ipWhitelist` | IP 白名单（仅文件模式） |
+| `ipBlocklist` | IP 黑名单（仅文件模式） |
+| `CCDeny` | 是否开启 CC 攻击拦截 |
+| `CCrate` | CC 攻击频率（如 100/60 表示 60 秒内最多 100 次） |
+| `html` | 拦截后显示的警告内容 |
+
+---
+
+## Redis 数据结构
+
+```
+waf:config                    (Hash)     # 配置
+  ├─ attacklog
+  ├─ logdir
+  ├─ UrlDeny
+  ├─ Redirect
+  ├─ CookieMatch
+  ├─ postMatch
+  ├─ whiteModule
+  ├─ CCDeny
+  ├─ CCrate
+  └─ html
+
+waf:rules:url               (Set)      # URL 规则
+waf:rules:args              (Set)      # ARGS 规则
+waf:rules:post              (Set)      # POST 规则
+waf:rules:cookie            (Set)      # Cookie 规则
+waf:rules:user-agent        (Set)      # UA 规则
+waf:rules:whiteurl          (Set)      # 白名单 URL
+
+waf:ip:whitelist            (Set)      # IP 白名单
+waf:ip:blocklist            (Set)      # IP 黑名单
+
+waf:version:config          (String)   # 配置版本号
+waf:version:rules           (String)   # 规则版本号
+waf:version:ip              (String)   # IP 版本号
+
+waf:cc:{ip}:{uri}           (String)   # CC 计数器（带过期时间）
+```
+
+---
+
+## Redis 模式下的热更新
+
+修改 Redis 数据后，递增对应的版本号即可自动生效，无需 reload Nginx：
+
+```bash
+# 修改配置后
+redis-cli INCR waf:version:config
+
+# 修改规则后
+redis-cli INCR waf:version:rules
+
+# 修改 IP 名单后
+redis-cli INCR waf:version:ip
+```
+
+---
+
+## Redis 模式常用命令
+
+### 配置管理
+
+```bash
+# 修改单个配置
+redis-cli HSET waf:config CCDeny on
+
+# 查看所有配置
+redis-cli HGETALL waf:config
+```
+
+### 规则管理
+
+```bash
+# 添加规则
+redis-cli SADD waf:rules:url "select.*from"
+
+# 删除规则
+redis-cli SREM waf:rules:url "select.*from"
+
+# 查看所有规则
+redis-cli SMEMBERS waf:rules:url
+
+# 更新后递增版本号
+redis-cli INCR waf:version:rules
+```
+
+### IP 名单管理
+
+```bash
+# 添加白名单 IP
+redis-cli SADD waf:ip:whitelist 192.168.1.100
+
+# 添加黑名单 IP
+redis-cli SADD waf:ip:blocklist 10.0.0.1
+
+# 检查 IP 是否在名单
+redis-cli SISMEMBER waf:ip:whitelist 192.168.1.100
+
+# 更新后递增版本号
+redis-cli INCR waf:version:ip
+```
+
+---
+
+## 规则文件说明
+
+规则文件位于 `wafconf/` 目录下：
+
+| 文件 | 说明 |
+|------|------|
+| `args` | GET 参数过滤规则 |
+| `url` | GET 请求 URL 过滤规则 |
+| `post` | POST 请求过滤规则 |
+| `cookie` | Cookie 过滤规则 |
+| `user-agent` | User-Agent 过滤规则 |
+| `whiteurl` | URL 白名单 |
+
+---
+
+## 检查规则是否生效
+
+部署后测试：
+
+```bash
+curl http://your-domain/test.php?id=../etc/passwd
+```
+
+如果返回警告页面，说明规则生效。
+
+注意：默认本机（127.0.0.1）在白名单中，不会被过滤。
+
+---
+
+## 切换模式
+
+### 从 Redis 模式回退到文件模式
+
+在 `config.lua` 中设置：
+
+```lua
+use_redis = false
+```
+
+然后 reload Nginx。
+
+---
+
+## 性能建议
+
+1. **本地缓存 TTL**（Redis 模式）：建议 3-10 秒，平衡实时性和性能
+2. **Redis 连接池**：根据 Nginx worker 数量调整 pool_size
+3. **共享内存大小**：`waf_cache` 根据规则数量调整，建议 10-50m
+
+---
+
+## 文件结构
+
+```
+ngx_lua_waf/
+├── config.lua              # 配置文件
+├── init.lua                # 初始化脚本
+├── init.lua.original       # 原始 init.lua（备份）
+├── waf.lua                 # WAF 主逻辑
+├── waf.lua.original        # 原始 waf.lua（备份）
+├── redis.lua               # Redis 操作模块（新增）
+├── cache.lua               # 本地缓存模块（新增）
+├── README.md               # 本文档
+├── install.sh
+└── wafconf/                # 规则文件目录
+    ├── args
+    ├── cookie
+    ├── post
+    ├── url
+    ├── user-agent
+    └── whiteurl
+└── admin/                  # 管理工具
+    ├── init_redis.py       # Python 初始化脚本
+    └── init_redis.lua      # Lua 初始化脚本
+```
+
+---
+
+## 故障排查
+
+### Redis 连接失败
+
+检查：
+- Redis 服务是否运行
+- `config.lua` 中的连接配置是否正确
+- 防火墙是否允许连接
+
+### 认证失败
+
+检查：
+- 用户名和密码是否正确
+- Redis 版本是否支持 ACL（如需用户名认证）
+- Redis ACL 用户是否有足够权限
+
+### 配置不生效
+
+检查：
+- 是否递增了版本号（Redis 模式）
+- 本地缓存是否过期（等待 cache_ttl 秒）
+- Nginx error.log 查看错误日志
+
+---
 
 ## Copyright
 
-<table>
-  <tr>
-    <td>Weibo</td><td>神奇的魔法师</td>
-  </tr>
-  <tr>
-    <td>Forum</td><td>http://bbs.linuxtone.org/</td>
-  </tr>
-  <tr>
-    <td>Copyright</td><td>Copyright (c) 2013- loveshell</td>
-  </tr>
-  <tr>
-    <td>License</td><td>MIT License</td>
-  </tr>
-</table>
-	
-感谢ngx_lua模块的开发者[@agentzh](https://github.com/agentzh/),春哥是我所接触过开源精神最好的人
+| 项目 | 信息 |
+|------|------|
+| Weibo | 神奇的魔法师 |
+| Forum | http://bbs.linuxtone.org/ |
+| Copyright | Copyright (c) 2013- loveshell |
+| License | MIT License |
+
+感谢 ngx_lua 模块的开发者 [@agentzh](https://github.com/agentzh)
