@@ -24,6 +24,9 @@ def read_config():
     with open(config_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
+            # 如果遇到 local _M = {，停止解析（这是返回 table 的部分）
+            if line.startswith('local _M = {'):
+                break
             # 先移除行尾的注释
             if '--' in line:
                 line = line.split('--', 1)[0].strip()
@@ -88,8 +91,8 @@ def main():
     r.hset(config_key, "CookieMatch", config.get('CookieMatch', 'on'))
     r.hset(config_key, "postMatch", config.get('postMatch', 'on'))
     r.hset(config_key, "whiteModule", config.get('whiteModule', 'on'))
-    r.hset(config_key, "CCDeny", config.get('CCDeny', 'off'))
-    r.hset(config_key, "CCrate", config.get('CCrate', '100/60'))
+    r.hset(config_key, "CCDeny", config.get('CCDeny', 'on'))
+    r.hset(config_key, "CCrate", config.get('CCrate', '10/60'))
     r.hset(config_key, "html", config.get('html', ''))
     print("[OK] 配置已初始化")
     
