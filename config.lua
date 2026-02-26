@@ -4,8 +4,8 @@ use_redis = true  -- 是否使用 Redis 版本，false 则使用原文件版本
 redis_host = "127.0.0.1"
 redis_port = 6379
 redis_db = 0  -- Redis DB 库选择，默认为 0
-redis_username = yanfa  -- Redis 6.0+ ACL 用户名，没有则设为 nil
-redis_password = BTh44gxWmp6FjhR6  -- 密码，没有则设为 nil
+redis_username = "yanfa"  -- Redis 6.0+ ACL 用户名，没有则设为 nil
+redis_password = "BTh44gxWmp6FjhR6"  -- 密码，没有则设为 nil
 redis_timeout = 1000  -- 毫秒
 redis_pool_size = 100
 redis_idle_timeout = 10000  -- 毫秒
@@ -27,7 +27,7 @@ black_fileExt={"php","jsp"}
 ipWhitelist={"127.0.0.1"}
 ipBlocklist={"1.0.0.1"}
 CCDeny="on"
-CCrate="1/1"
+CCrate="10/60"
 html=[[
 <!DOCTYPE html>
 <html>
@@ -63,3 +63,33 @@ body{font-family:Microsoft YaHei, sans-serif;background:#f0f2f5;margin:0;padding
 </body>
 </html>
 ]]
+
+local _M = {
+    use_redis = use_redis,
+    redis_host = redis_host,
+    redis_port = redis_port,
+    redis_db = redis_db,
+    redis_username = redis_username,
+    redis_password = redis_password,
+    redis_timeout = redis_timeout,
+    redis_pool_size = redis_pool_size,
+    redis_idle_timeout = redis_idle_timeout,
+    cache_ttl = cache_ttl,
+    enable_cache = enable_cache,
+    RulePath = RulePath,
+    attacklog = attacklog,
+    logdir = logdir,
+    UrlDeny = UrlDeny,
+    Redirect = Redirect,
+    CookieMatch = CookieMatch,
+    postMatch = postMatch,
+    whiteModule = whiteModule,
+    black_fileExt = black_fileExt,
+    ipWhitelist = ipWhitelist,
+    ipBlocklist = ipBlocklist,
+    CCDeny = CCDeny,
+    CCrate = CCrate,
+    html = html
+}
+
+return _M
