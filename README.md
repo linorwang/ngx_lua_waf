@@ -40,7 +40,7 @@ git clone https://github.com/linorwang/ngx_lua_waf.git waf
 在 `http` 块中添加：
 
 ```nginx
-lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua";
+lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua;/usr/local/openresty/lualib/?.lua;/usr/local/openresty/site/lualib/?.lua;;";
 lua_shared_dict limit 10m;
 init_by_lua_file  /usr/local/openresty/nginx/conf/waf/init.lua;
 access_by_lua_file /usr/local/openresty/nginx/conf/waf/waf.lua;
@@ -89,7 +89,7 @@ chown -R nginx:nginx /usr/local/openresty/nginx/logs/hack
 在 `http` 块中添加：
 
 ```nginx
-lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua";
+lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua;/usr/local/openresty/lualib/?.lua;/usr/local/openresty/site/lualib/?.lua;;";
 lua_shared_dict limit 50m;
 lua_shared_dict waf_cache 10m;  # 新增，用于本地缓存
 init_by_lua_file  /usr/local/openresty/nginx/conf/waf/init.lua;
