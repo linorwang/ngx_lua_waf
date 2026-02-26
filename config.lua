@@ -3,6 +3,7 @@ use_redis = true  -- 是否使用 Redis 版本，false 则使用原文件版本
 
 redis_host = "127.0.0.1"
 redis_port = 6379
+redis_db = 0  -- Redis DB 库选择，默认为 0
 redis_username = nil  -- Redis 6.0+ ACL 用户名，没有则设为 nil
 redis_password = nil  -- 密码，没有则设为 nil
 redis_timeout = 1000  -- 毫秒

@@ -8,7 +8,6 @@
 import sys
 import os
 
-# 添加项目根目录到 Python 路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(script_dir, '..'))
 
@@ -19,7 +18,6 @@ except ImportError:
     print("请运行：pip install redis")
     sys.exit(1)
 
-# 读取 config.lua 配置（简单解析）
 def read_config():
     config = {}
     config_path = os.path.join(script_dir, '..', 'config.lua')
@@ -35,7 +33,6 @@ def read_config():
                 config[key] = value
     return config
 
-# 读取规则文件
 def read_rule_file(rule_path, filename):
     filepath = os.path.join(rule_path, filename)
     rules = []
@@ -50,9 +47,9 @@ def read_rule_file(rule_path, filename):
 def main():
     config = read_config()
     
-    # Redis 连接
     redis_host = config.get('redis_host', '127.0.0.1')
     redis_port = int(config.get('redis_port', 6379))
+    redis_db = int(config.get('redis_db', 0))
     redis_username = config.get('redis_username')
     if redis_username == 'nil':
         redis_username = None
@@ -63,12 +60,13 @@ def main():
     rule_path = config.get('RulePath', '/usr/local/nginx/conf/waf/wafconf/')
     
     print("正在初始化 Redis 数据...")
-    print(f"Redis: {redis_host}:{redis_port}")
+    print(f"Redis: {redis_host}:{redis_port}/{redis_db}")
     
     try:
         r = redis.Redis(
             host=redis_host,
             port=redis_port,
+            db=redis_db,
             username=redis_username,
             password=redis_password,
             decode_responses=True
@@ -78,7 +76,6 @@ def main():
         print(f"错误：无法连接 Redis - {e}")
         return
     
-    # 初始化配置
     config_key = "waf:config"
     r.delete(config_key)
     r.hset(config_key, "attacklog", config.get('attacklog', 'on'))
@@ -93,7 +90,6 @@ def main():
     r.hset(config_key, "html", config.get('html', ''))
     print("[OK] 配置已初始化")
     
-    # 初始化规则
     rule_types = ["url", "args", "post", "cookie", "user-agent", "whiteurl"]
     for rule_type in rule_types:
         key = f"waf:rules:{rule_type}"
@@ -103,7 +99,6 @@ def main():
             r.sadd(key, *rules)
         print(f"[OK] {rule_type} 规则已初始化 ({len(rules)} 条)")
     
-    # 初始化 IP 白名单
     whitelist_key = "waf:ip:whitelist"
     r.delete(whitelist_key)
     ip_whitelist = ["127.0.0.1"]
@@ -111,7 +106,6 @@ def main():
         r.sadd(whitelist_key, *ip_whitelist)
     print(f"[OK] IP 白名单已初始化 ({len(ip_whitelist)} 条)")
     
-    # 初始化 IP 黑名单
     blocklist_key = "waf:ip:blocklist"
     r.delete(blocklist_key)
     ip_blocklist = ["1.0.0.1"]
@@ -119,7 +113,6 @@ def main():
         r.sadd(blocklist_key, *ip_blocklist)
     print(f"[OK] IP 黑名单已初始化 ({len(ip_blocklist)} 条)")
     
-    # 初始化版本号
     r.set("waf:version:config", "1")
     r.set("waf:version:rules", "1")
     r.set("waf:version:ip", "1")

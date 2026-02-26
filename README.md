@@ -104,6 +104,7 @@ use_redis = true  -- 启用 Redis 版本
 
 redis_host = "127.0.0.1"
 redis_port = 6379
+redis_db = 0  -- Redis DB 库选择，默认为 0
 redis_username = nil  -- Redis 6.0+ ACL 用户名，没有则设为 nil
 redis_password = nil  -- 密码，没有则设为 nil
 redis_timeout = 1000  -- 毫秒
@@ -114,6 +115,19 @@ redis_idle_timeout = 10000  -- 毫秒
 cache_ttl = 5  -- 秒，本地缓存过期时间
 enable_cache = true  -- 是否启用本地缓存
 ```
+
+#### Redis 认证方式说明
+
+| 配置项 | 说明 |
+|--------|------|
+| `redis_host` | Redis 主机地址 |
+| `redis_port` | Redis 端口 |
+| `redis_db` | Redis DB 库号，默认为 0 |
+| `redis_username` | Redis 6.0+ ACL 用户名，没有则设为 nil |
+| `redis_password` | Redis 密码，没有则设为 nil |
+| `redis_timeout` | 连接超时时间（毫秒） |
+| `redis_pool_size` | 连接池大小 |
+| `redis_idle_timeout` | 连接空闲超时（毫秒） |
 
 #### Redis 认证方式说明
 

@@ -2,474 +2,94 @@ local redis = require "resty.redis"
 local config = require "config"
 
 local _M = {}
-local mt = { __index = _M }
-
--- Redis Key 前缀
 local PREFIX = "waf:"
 
--- 获取 Redis 连接
 local function get_redis()
     local red = redis:new()
     red:set_timeout(config.redis_timeout or 1000)
-    
     local ok, err = red:connect(config.redis_host or "127.0.0.1", config.redis_port or 6379)
-    if not ok then
-        ngx.log(ngx.ERR, "failed to connect to redis: ", err)
-        return nil, err
-    end
-    
+    if not ok then ngx.log(ngx.ERR, "redis connect failed: ", err); return nil end
     if config.redis_password then
-        local ok, err
-        if config.redis_username then
-            -- Redis 6.0+ ACL: 用户名 + 密码
-            ok, err = red:auth(config.redis_username, config.redis_password)
-        else
-            -- 只有密码（传统方式）
-            ok, err = red:auth(config.redis_password)
-        end
-        if not ok then
-            ngx.log(ngx.ERR, "failed to authenticate: ", err)
-            return nil, err
-        end
+        ok, err = config.redis_username and red:auth(config.redis_username, config.redis_password) or red:auth(config.redis_password)
+        if not ok then ngx.log(ngx.ERR, "redis auth failed: ", err); return nil end
     end
-    
+    if config.redis_db and config.redis_db ~= 0 then
+        ok, err = red:select(config.redis_db)
+        if not ok then ngx.log(ngx.ERR, "redis select db failed: ", err); return nil end
+    end
     return red
 end
 
--- 归还 Redis 连接到连接池
 local function close_redis(red)
-    if not red then
-        return
-    end
-    
-    local pool_size = config.redis_pool_size or 100
-    local idle_timeout = config.redis_idle_timeout or 10000
-    
-    local ok, err = red:set_keepalive(idle_timeout, pool_size)
-    if not ok then
-        ngx.log(ngx.ERR, "failed to set keepalive: ", err)
-        red:close()
-    end
+    if not red then return end
+    local ok, err = red:set_keepalive(config.redis_idle_timeout or 10000, config.redis_pool_size or 100)
+    if not ok then ngx.log(ngx.ERR, "redis keepalive failed: ", err); red:close() end
 end
 
--- 构建 Key
-local function build_key(...)
-    local args = {...}
-    return PREFIX .. table.concat(args, ":")
-end
+local function build_key(...) return PREFIX .. table.concat({...}, ":") end
 
--- 获取配置（Hash）
-function _M.get_config(key)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local res, err = red:hget(build_key("config"), key)
+local function with_redis(callback)
+    local red = get_redis()
+    if not red then return nil end
+    local res, err = callback(red)
     close_redis(red)
-    
-    if res == ngx.null then
-        return nil
-    end
-    
-    return res
+    return res, err
 end
 
--- 获取所有配置
-function _M.get_all_config()
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local res, err = red:hgetall(build_key("config"))
-    close_redis(red)
-    
-    if not res or res == ngx.null then
-        return nil
-    end
-    
-    local configs = {}
-    for i = 1, #res, 2 do
-        configs[res[i]] = res[i + 1]
-    end
-    
-    return configs
+function _M.get_config(key) return with_redis(function(r) local v=r:hget(build_key("config"),key); return v~=ngx.null and v or nil end) end
+function _M.get_all_config() return with_redis(function(r)
+    local res=r:hgetall(build_key("config"))
+    if not res or res==ngx.null then return nil end
+    local c={}; for i=1,#res,2 do c[res[i]]=res[i+1] end; return c
+end) end
+function _M.set_config(k,v) return with_redis(function(r) local o=r:hset(build_key("config"),k,v); if o then r:incr(build_key("version","config")) end; return o end) end
+function _M.get_rules(t) return with_redis(function(r) local res=r:smembers(build_key("rules",t)); return (res and res~=ngx.null) and res or {} end) end
+function _M.add_rule(t,r) return with_redis(function(x) local o=x:sadd(build_key("rules",t),r); if o then x:incr(build_key("version","rules")) end; return o end) end
+function _M.del_rule(t,r) return with_redis(function(x) local o=x:srem(build_key("rules",t),r); if o then x:incr(build_key("version","rules")) end; return o end) end
+function _M.exists_rule(t,r) return with_redis(function(x) return x:sismember(build_key("rules",t),r)==1 end) end
+
+local function ip_list_op(op, list_type, ip)
+    return with_redis(function(r)
+        local key = build_key("ip", list_type)
+        if op == "get" then local res=r:smembers(key); return (res and res~=ngx.null) and res or {}
+        elseif op == "add" then local o=r:sadd(key,ip); if o then r:incr(build_key("version","ip")) end; return o
+        elseif op == "del" then local o=r:srem(key,ip); if o then r:incr(build_key("version","ip")) end; return o
+        elseif op == "check" then return r:sismember(key,ip)==1 end
+    end)
 end
 
--- 设置配置
-function _M.set_config(key, value)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:hset(build_key("config"), key, value)
-    if ok then
-        red:incr(build_key("version", "config"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
+function _M.get_ip_whitelist() return ip_list_op("get","whitelist") end
+function _M.add_ip_whitelist(ip) return ip_list_op("add","whitelist",ip) end
+function _M.del_ip_whitelist(ip) return ip_list_op("del","whitelist",ip) end
+function _M.check_ip_whitelist(ip) return ip_list_op("check","whitelist",ip) end
+function _M.get_ip_blocklist() return ip_list_op("get","blocklist") end
+function _M.add_ip_blocklist(ip) return ip_list_op("add","blocklist",ip) end
+function _M.del_ip_blocklist(ip) return ip_list_op("del","blocklist",ip) end
+function _M.check_ip_blocklist(ip) return ip_list_op("check","blocklist",ip) end
 
--- 获取规则集合
-function _M.get_rules(rule_type)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local res, err = red:smembers(build_key("rules", rule_type))
-    close_redis(red)
-    
-    if not res or res == ngx.null then
-        return {}
-    end
-    
-    return res
-end
-
--- 添加规则
-function _M.add_rule(rule_type, rule)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:sadd(build_key("rules", rule_type), rule)
-    if ok then
-        red:incr(build_key("version", "rules"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
-
--- 删除规则
-function _M.del_rule(rule_type, rule)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:srem(build_key("rules", rule_type), rule)
-    if ok then
-        red:incr(build_key("version", "rules"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
-
--- 检查规则是否存在
-function _M.exists_rule(rule_type, rule)
-    local red, err = get_redis()
-    if not red then
-        return false, err
-    end
-    
-    local res, err = red:sismember(build_key("rules", rule_type), rule)
-    close_redis(red)
-    
-    return res == 1, err
-end
-
--- 获取 IP 白名单
-function _M.get_ip_whitelist()
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local res, err = red:smembers(build_key("ip", "whitelist"))
-    close_redis(red)
-    
-    if not res or res == ngx.null then
-        return {}
-    end
-    
-    return res
-end
-
--- 添加 IP 到白名单
-function _M.add_ip_whitelist(ip)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:sadd(build_key("ip", "whitelist"), ip)
-    if ok then
-        red:incr(build_key("version", "ip"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
-
--- 从白名单删除 IP
-function _M.del_ip_whitelist(ip)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:srem(build_key("ip", "whitelist"), ip)
-    if ok then
-        red:incr(build_key("version", "ip"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
-
--- 检查 IP 是否在白名单
-function _M.check_ip_whitelist(ip)
-    local red, err = get_redis()
-    if not red then
-        return false, err
-    end
-    
-    local res, err = red:sismember(build_key("ip", "whitelist"), ip)
-    close_redis(red)
-    
-    return res == 1, err
-end
-
--- 获取 IP 黑名单
-function _M.get_ip_blocklist()
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local res, err = red:smembers(build_key("ip", "blocklist"))
-    close_redis(red)
-    
-    if not res or res == ngx.null then
-        return {}
-    end
-    
-    return res
-end
-
--- 添加 IP 到黑名单
-function _M.add_ip_blocklist(ip)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:sadd(build_key("ip", "blocklist"), ip)
-    if ok then
-        red:incr(build_key("version", "ip"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
-
--- 从黑名单删除 IP
-function _M.del_ip_blocklist(ip)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local ok, err = red:srem(build_key("ip", "blocklist"), ip)
-    if ok then
-        red:incr(build_key("version", "ip"))
-    end
-    close_redis(red)
-    
-    return ok, err
-end
-
--- 检查 IP 是否在黑名单
-function _M.check_ip_blocklist(ip)
-    local red, err = get_redis()
-    if not red then
-        return false, err
-    end
-    
-    local res, err = red:sismember(build_key("ip", "blocklist"), ip)
-    close_redis(red)
-    
-    return res == 1, err
-end
-
--- CC 防护：增加计数
-function _M.cc_incr(ip, uri, seconds)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("cc", ip, uri)
-    red:init_pipeline()
-    red:incr(key)
-    red:expire(key, seconds)
-    local results, err = red:commit_pipeline()
-    
-    close_redis(red)
-    
-    if not results then
-        return nil, err
-    end
-    
-    return results[1]
-end
-
--- CC 防护：获取计数
-function _M.cc_get(ip, uri)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("cc", ip, uri)
-    local res, err = red:get(key)
-    close_redis(red)
-    
-    if res == ngx.null then
-        return 0
-    end
-    
-    return tonumber(res) or 0
-end
-
--- 获取版本号
-function _M.get_version(version_type)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local res, err = red:get(build_key("version", version_type))
-    close_redis(red)
-    
-    if res == ngx.null then
-        return "0"
-    end
-    
-    return res
-end
-
--- 初始化版本号
-function _M.init_version(version_type)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("version", version_type)
-    red:setnx(key, "0")
-    close_redis(red)
-    
-    return true
-end
-
--- 批量初始化规则
-function _M.init_rules(rule_type, rules)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("rules", rule_type)
-    red:del(key)
-    
-    if #rules > 0 then
-        red:init_pipeline()
-        for _, rule in ipairs(rules) do
-            if rule and rule ~= "" then
-                red:sadd(key, rule)
-            end
-        end
-        red:commit_pipeline()
-    end
-    
-    red:incr(build_key("version", "rules"))
-    close_redis(red)
-    
-    return true
-end
-
--- 批量初始化 IP 白名单
-function _M.init_ip_whitelist(ips)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("ip", "whitelist")
-    red:del(key)
-    
-    if #ips > 0 then
-        red:init_pipeline()
-        for _, ip in ipairs(ips) do
-            if ip and ip ~= "" then
-                red:sadd(key, ip)
-            end
-        end
-        red:commit_pipeline()
-    end
-    
-    red:incr(build_key("version", "ip"))
-    close_redis(red)
-    
-    return true
-end
-
--- 批量初始化 IP 黑名单
-function _M.init_ip_blocklist(ips)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("ip", "blocklist")
-    red:del(key)
-    
-    if #ips > 0 then
-        red:init_pipeline()
-        for _, ip in ipairs(ips) do
-            if ip and ip ~= "" then
-                red:sadd(key, ip)
-            end
-        end
-        red:commit_pipeline()
-    end
-    
-    red:incr(build_key("version", "ip"))
-    close_redis(red)
-    
-    return true
-end
-
--- 批量初始化配置
-function _M.init_config(configs)
-    local red, err = get_redis()
-    if not red then
-        return nil, err
-    end
-    
-    local key = build_key("config")
-    red:del(key)
-    
-    if configs and next(configs) then
-        for k, v in pairs(configs) do
-            if v then
-                red:hset(key, k, v)
-            end
-        end
-    end
-    
-    red:incr(build_key("version", "config"))
-    close_redis(red)
-    
-    return true
-end
+function _M.cc_incr(ip,uri,sec) return with_redis(function(r)
+    local k=build_key("cc",ip,uri); r:init_pipeline(); r:incr(k); r:expire(k,sec)
+    local res=r:commit_pipeline(); return res and res[1] or nil
+end) end
+function _M.cc_get(ip,uri) return with_redis(function(r) local v=r:get(build_key("cc",ip,uri)); return v~=ngx.null and (tonumber(v) or 0) or 0 end) end
+function _M.get_version(t) return with_redis(function(r) local v=r:get(build_key("version",t)); return v~=ngx.null and v or "0" end) end
+function _M.init_version(t) return with_redis(function(r) r:setnx(build_key("version",t),"0"); return true end) end
+function _M.init_rules(t, rules) return with_redis(function(r)
+    local k=build_key("rules",t); r:del(k)
+    if #rules>0 then r:init_pipeline(); for _,x in ipairs(rules) do if x and x~="" then r:sadd(k,x) end end; r:commit_pipeline() end
+    r:incr(build_key("version","rules")); return true
+end) end
+local function init_ip_list(t,ips) return with_redis(function(r)
+    local k=build_key("ip",t); r:del(k)
+    if #ips>0 then r:init_pipeline(); for _,x in ipairs(ips) do if x and x~="" then r:sadd(k,x) end end; r:commit_pipeline() end
+    r:incr(build_key("version","ip")); return true
+end) end
+function _M.init_ip_whitelist(ips) return init_ip_list("whitelist",ips) end
+function _M.init_ip_blocklist(ips) return init_ip_list("blocklist",ips) end
+function _M.init_config(cfgs) return with_redis(function(r)
+    local k=build_key("config"); r:del(k)
+    if cfgs and next(cfgs) then for kk,vv in pairs(cfgs) do if vv then r:hset(k,kk,vv) end end end
+    r:incr(build_key("version","config")); return true
+end) end
 
 return _M
