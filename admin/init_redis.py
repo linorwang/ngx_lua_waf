@@ -24,7 +24,10 @@ def read_config():
     with open(config_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith('--') and '=' in line:
+            # 先移除行尾的注释
+            if '--' in line:
+                line = line.split('--', 1)[0].strip()
+            if line and '=' in line:
                 key, value = line.split('=', 1)
                 key = key.strip()
                 value = value.strip().rstrip(',')
