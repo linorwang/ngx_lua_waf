@@ -50,7 +50,7 @@ access_by_lua_file /usr/local/nginx/conf/waf/waf.lua;
 
 ```lua
 RulePath = "/usr/local/nginx/conf/waf/wafconf/"
-attacklog = "on"
+attacklog = "off"  -- 默认关闭日志，需要时手动开启
 logdir = "/usr/local/nginx/logs/hack/"
 UrlDeny = "on"
 Redirect = "on"
@@ -61,7 +61,7 @@ CCDeny = "off"
 CCrate = "100/60"
 ```
 
-### 4. 创建日志目录
+### 4. 创建日志目录（如需启用日志）
 
 ```bash
 mkdir -p /usr/local/nginx/logs/hack
@@ -114,9 +114,24 @@ redis_idle_timeout = 10000  -- 毫秒
 -- ==================== 本地缓存配置 ====================
 cache_ttl = 5  -- 秒，本地缓存过期时间
 enable_cache = true  -- 是否启用本地缓存
+
+-- ==================== WAF 基础配置（仅用于初始化 Redis，运行时从 Redis 读取） ====================
+RulePath = "/usr/local/nginx/conf/waf/wafconf/"
+attacklog = "off"  -- 默认关闭日志，需要时手动开启
+logdir = "/usr/local/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
+UrlDeny="on"
+Redirect="on"
+CookieMatch="on"
+postMatch="on"
+whiteModule="on"
+black_fileExt={"php","jsp"}
+ipWhitelist={"127.0.0.1"}
+ipBlocklist={"1.0.0.1"}
+CCDeny="off"
+CCrate="100/60"
 ```
 
-#### Redis 认证方式说明
+#### Redis 配置项说明
 
 | 配置项 | 说明 |
 |--------|------|
@@ -170,8 +185,8 @@ nginx -s reload
 | 配置项 | 说明 |
 |--------|------|
 | `RulePath` | 规则存放目录（仅文件模式） |
-| `attacklog` | 是否开启攻击日志记录 |
-| `logdir` | 日志存储目录 |
+| `attacklog` | 是否开启攻击日志记录（默认 off） |
+| `logdir` | 日志存储目录（由维护者管理） |
 | `UrlDeny` | 是否拦截 URL 访问 |
 | `Redirect` | 是否拦截后重定向 |
 | `CookieMatch` | 是否拦截 Cookie 攻击 |
@@ -247,6 +262,9 @@ redis-cli HSET waf:config CCDeny on
 
 # 查看所有配置
 redis-cli HGETALL waf:config
+
+# 开启日志
+redis-cli HSET waf:config attacklog on
 ```
 
 ### 规则管理
@@ -331,6 +349,7 @@ use_redis = false
 1. **本地缓存 TTL**（Redis 模式）：建议 3-10 秒，平衡实时性和性能
 2. **Redis 连接池**：根据 Nginx worker 数量调整 pool_size
 3. **共享内存大小**：`waf_cache` 根据规则数量调整，建议 10-50m
+4. **日志管理**：attacklog 默认关闭，按需开启，日志轮转和清理由维护者自行管理
 
 ---
 
