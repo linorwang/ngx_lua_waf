@@ -15,9 +15,9 @@ cache_ttl = 5  -- 秒，本地缓存过期时间
 enable_cache = true  -- 是否启用本地缓存
 
 -- ==================== WAF 基础配置（仅用于初始化 Redis，运行时从 Redis 读取） ====================
-RulePath = "/usr/local/nginx/conf/waf/wafconf/"
+RulePath = "/usr/local/openresty/nginx/conf/waf/wafconf/"
 attacklog = "off"  -- 默认关闭日志，需要时手动开启
-logdir = "/usr/local/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
+logdir = "/usr/local/openresty/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
 UrlDeny="on"
 Redirect="on"
 CookieMatch="on"

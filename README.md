@@ -28,10 +28,10 @@ ngx_lua_waf 是一个基于 ngx_lua 的 Web 应用防火墙，使用简单、高
 
 ### 1. 安装
 
-假设 Nginx 安装路径为 `/usr/local/nginx/conf/`：
+假设 OpenResty 安装路径为 `/usr/local/openresty/nginx/conf/`：
 
 ```bash
-cd /usr/local/nginx/conf
+cd /usr/local/openresty/nginx/conf
 git clone https://github.com/linorwang/ngx_lua_waf.git waf
 ```
 
@@ -40,18 +40,18 @@ git clone https://github.com/linorwang/ngx_lua_waf.git waf
 在 `http` 块中添加：
 
 ```nginx
-lua_package_path "/usr/local/nginx/conf/waf/?.lua";
+lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua";
 lua_shared_dict limit 10m;
-init_by_lua_file  /usr/local/nginx/conf/waf/init.lua;
-access_by_lua_file /usr/local/nginx/conf/waf/waf.lua;
+init_by_lua_file  /usr/local/openresty/nginx/conf/waf/init.lua;
+access_by_lua_file /usr/local/openresty/nginx/conf/waf/waf.lua;
 ```
 
 ### 3. 配置 config.lua
 
 ```lua
-RulePath = "/usr/local/nginx/conf/waf/wafconf/"
+RulePath = "/usr/local/openresty/nginx/conf/waf/wafconf/"
 attacklog = "off"  -- 默认关闭日志，需要时手动开启
-logdir = "/usr/local/nginx/logs/hack/"
+logdir = "/usr/local/openresty/nginx/logs/hack/"
 UrlDeny = "on"
 Redirect = "on"
 CookieMatch = "on"
@@ -64,15 +64,15 @@ CCrate = "100/60"
 ### 4. 创建日志目录（如需启用日志）
 
 ```bash
-mkdir -p /usr/local/nginx/logs/hack
-chown -R nginx:nginx /usr/local/nginx/logs/hack
+mkdir -p /usr/local/openresty/nginx/logs/hack
+chown -R nginx:nginx /usr/local/openresty/nginx/logs/hack
 ```
 
-### 5. 重启 Nginx
+### 5. 重启 OpenResty
 
 ```bash
-nginx -t
-nginx -s reload
+/usr/local/openresty/nginx/sbin/nginx -t
+/usr/local/openresty/nginx/sbin/nginx -s reload
 ```
 
 ---
@@ -82,18 +82,18 @@ nginx -s reload
 ### 1. 前置条件
 
 - Redis 服务
-- lua-resty-redis 模块
+- lua-resty-redis 模块（OpenResty 自带）
 
 ### 2. 配置 nginx.conf
 
 在 `http` 块中添加：
 
 ```nginx
-lua_package_path "/usr/local/nginx/conf/waf/?.lua";
+lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua";
 lua_shared_dict limit 50m;
 lua_shared_dict waf_cache 10m;  # 新增，用于本地缓存
-init_by_lua_file  /usr/local/nginx/conf/waf/init.lua;
-access_by_lua_file /usr/local/nginx/conf/waf/waf.lua;
+init_by_lua_file  /usr/local/openresty/nginx/conf/waf/init.lua;
+access_by_lua_file /usr/local/openresty/nginx/conf/waf/waf.lua;
 ```
 
 ### 3. 配置 config.lua
@@ -116,9 +116,9 @@ cache_ttl = 5  -- 秒，本地缓存过期时间
 enable_cache = true  -- 是否启用本地缓存
 
 -- ==================== WAF 基础配置（仅用于初始化 Redis，运行时从 Redis 读取） ====================
-RulePath = "/usr/local/nginx/conf/waf/wafconf/"
+RulePath = "/usr/local/openresty/nginx/conf/waf/wafconf/"
 attacklog = "off"  -- 默认关闭日志，需要时手动开启
-logdir = "/usr/local/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
+logdir = "/usr/local/openresty/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
 UrlDeny="on"
 Redirect="on"
 CookieMatch="on"
@@ -157,7 +157,7 @@ CCrate="100/60"
 使用 Python 脚本（推荐）：
 
 ```bash
-cd /usr/local/nginx/conf/waf/admin
+cd /usr/local/openresty/nginx/conf/waf/admin
 pip install redis
 python3 init_redis.py
 ```
@@ -165,15 +165,15 @@ python3 init_redis.py
 或使用 Lua 脚本（需要 luasocket）：
 
 ```bash
-cd /usr/local/nginx/conf/waf/admin
+cd /usr/local/openresty/nginx/conf/waf/admin
 lua init_redis.lua
 ```
 
-### 5. 重启 Nginx
+### 5. 重启 OpenResty
 
 ```bash
-nginx -t
-nginx -s reload
+/usr/local/openresty/nginx/sbin/nginx -t
+/usr/local/openresty/nginx/sbin/nginx -s reload
 ```
 
 ---
@@ -237,7 +237,7 @@ waf:cc:{ip}:{uri}           (String)   # CC 计数器（带过期时间）
 
 ## Redis 模式下的热更新
 
-修改 Redis 数据后，递增对应的版本号即可自动生效，无需 reload Nginx：
+修改 Redis 数据后，递增对应的版本号即可自动生效，无需 reload OpenResty：
 
 ```bash
 # 修改配置后
@@ -340,14 +340,14 @@ curl http://your-domain/test.php?id=../etc/passwd
 use_redis = false
 ```
 
-然后 reload Nginx。
+然后 reload OpenResty。
 
 ---
 
 ## 性能建议
 
 1. **本地缓存 TTL**（Redis 模式）：建议 3-10 秒，平衡实时性和性能
-2. **Redis 连接池**：根据 Nginx worker 数量调整 pool_size
+2. **Redis 连接池**：根据 OpenResty worker 数量调整 pool_size
 3. **共享内存大小**：`waf_cache` 根据规则数量调整，建议 10-50m
 4. **日志管理**：attacklog 默认关闭，按需开启，日志轮转和清理由维护者自行管理
 
@@ -401,7 +401,7 @@ ngx_lua_waf/
 检查：
 - 是否递增了版本号（Redis 模式）
 - 本地缓存是否过期（等待 cache_ttl 秒）
-- Nginx error.log 查看错误日志
+- OpenResty error.log 查看错误日志
 
 ---
 
