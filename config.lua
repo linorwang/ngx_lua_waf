@@ -1,5 +1,5 @@
 -- ==================== Redis 连接配置 ====================
-use_redis = true  -- 是否使用 Redis 版本，false 则使用原文件版本
+use_redis = true
 
 redis_host = "172.26.253.215"
 redis_port = 6379

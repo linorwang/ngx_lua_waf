@@ -1,10 +1,5 @@
 local config = require "config"
 
-if not config.use_redis then
-    dofile(ngx.config.prefix() .. "conf/waf/waf.lua.original")
-    return
-end
-
 -- 延迟加载模块，避免在 require 阶段执行任何可能 yield 的操作
 local waf_redis, waf_cache = nil, nil
 
