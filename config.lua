@@ -28,6 +28,7 @@ ipWhitelist={"127.0.0.1"}
 ipBlocklist={"1.0.0.1","210.12.51.197"}
 CCDeny="on"
 CCrate="10/60"
+CCBanTime=3600
 html=[[
 <!DOCTYPE html>
 <html>
@@ -89,6 +90,7 @@ local _M = {
     ipBlocklist = ipBlocklist,
     CCDeny = CCDeny,
     CCrate = CCrate,
+    CCBanTime = CCBanTime,
     html = html
 }
 

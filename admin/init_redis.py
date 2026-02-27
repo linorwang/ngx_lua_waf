@@ -134,6 +134,7 @@ def main():
     r.hset(config_key, "whiteModule", config.get('whiteModule', 'on'))
     r.hset(config_key, "CCDeny", config.get('CCDeny', 'on'))
     r.hset(config_key, "CCrate", config.get('CCrate', '10/60'))
+    r.hset(config_key, "CCBanTime", config.get('CCBanTime', '3600'))
     r.hset(config_key, "html", config.get('html', ''))
     print("[OK] 配置已初始化")
     

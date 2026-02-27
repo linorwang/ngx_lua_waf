@@ -44,7 +44,8 @@ local function load_config()
     runtime_config = c or {
         attacklog=config.attacklog, logdir=config.logdir, UrlDeny=config.UrlDeny,
         Redirect=config.Redirect, CookieMatch=config.CookieMatch, postMatch=config.postMatch,
-        whiteModule=config.whiteModule, CCDeny=config.CCDeny, CCrate=config.CCrate, html=config.html
+        whiteModule=config.whiteModule, CCDeny=config.CCDeny, CCrate=config.CCrate, 
+        CCBanTime=config.CCBanTime, html=config.html
     }
 end
 
@@ -179,15 +180,37 @@ local function denycc()
     ensure_modules_loaded()
     if not optionIsOn(get_config("CCDeny", config.CCDeny)) then return false end
     local uri, rate, ip = ngx.var.uri, get_config("CCrate", config.CCrate), getClientIp()
+    local ban_time = tonumber(get_config("CCBanTime", config.CCBanTime or 3600))
+    
+    -- 先检查是否已被封禁
+    local banned = waf_redis.cc_ban_check(ip)
+    if banned then
+        ngx.exit(503)
+        return true
+    end
+    
     local cnt, sec = tonumber(rate:match('(.*)/')), tonumber(rate:match('/(.*)'))
     local count = waf_redis.cc_incr(ip, uri, sec)
     if count then
-        if count > cnt then ngx.exit(503); return true end
+        if count > cnt then
+            -- 超过阈值，设置封禁
+            waf_redis.cc_ban_set(ip, ban_time)
+            ngx.exit(503)
+            return true
+        end
     else
         local limit, token = ngx.shared.limit, ip..uri
         local req = limit:get(token)
-        if req then if req > cnt then ngx.exit(503); return true else limit:incr(token,1) end
-        else limit:set(token,1,sec) end
+        if req then 
+            if req > cnt then 
+                ngx.exit(503)
+                return true 
+            else 
+                limit:incr(token,1) 
+            end
+        else 
+            limit:set(token,1,sec) 
+        end
     end
     return false
 end

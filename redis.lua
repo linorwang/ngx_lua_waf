@@ -72,6 +72,17 @@ function _M.cc_incr(ip,uri,sec) return with_redis(function(r)
     local res=r:commit_pipeline(); return res and res[1] or nil
 end) end
 function _M.cc_get(ip,uri) return with_redis(function(r) local v=r:get(build_key("cc",ip,uri)); return v~=ngx.null and (tonumber(v) or 0) or 0 end) end
+
+-- CC 封禁相关函数
+function _M.cc_ban_check(ip) return with_redis(function(r)
+    local k=build_key("cc:ban",ip); local v=r:get(k); return v~=ngx.null
+end) end
+function _M.cc_ban_set(ip,ban_time) return with_redis(function(r)
+    local k=build_key("cc:ban",ip); return r:setex(k,ban_time,1)
+end) end
+function _M.cc_ban_del(ip) return with_redis(function(r)
+    local k=build_key("cc:ban",ip); return r:del(k)
+end) end
 function _M.get_version(t) return with_redis(function(r) local v=r:get(build_key("version",t)); return v~=ngx.null and v or "0" end) end
 function _M.init_version(t) return with_redis(function(r) r:setnx(build_key("version",t),"0"); return true end) end
 function _M.init_rules(t, rules) return with_redis(function(r)
