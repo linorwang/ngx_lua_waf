@@ -210,41 +210,48 @@ local function load_all()
     load_ip_list("blocklist", config.ipBlocklist)
 end
 
--- 直接执行 WAF 检查
-local ok, err = pcall(function()
-    load_all()
+-- WAF 主函数（导出供调用）
+local function run_waf()
+    local ok, err = pcall(function()
+        load_all()
 
-    if whiteip() then return end
-    if blockip() then return end
-    if denycc() then return end
-    if whiteurl() then return end
-    if url() then return end
-    if args() then return end
-    if ua() then return end
-    if cookie() then return end
+        if whiteip() then return end
+        if blockip() then return end
+        if denycc() then return end
+        if whiteurl() then return end
+        if url() then return end
+        if args() then return end
+        if ua() then return end
+        if cookie() then return end
 
-    local method, boundary, ext = ngx.req.get_method(), get_boundary(), nil
-    if method == "POST" then
-        ngx.req.read_body()
-        local body_data = ngx.req.get_body_data()
-        if body_data then
-            if body(body_data) then return end
-            if boundary then
-                for e in body_data:gmatch('filename=".-%.(.-)"') do ext = e; break end
+        local method, boundary, ext = ngx.req.get_method(), get_boundary(), nil
+        if method == "POST" then
+            ngx.req.read_body()
+            local body_data = ngx.req.get_body_data()
+            if body_data then
+                if body(body_data) then return end
+                if boundary then
+                    for e in body_data:gmatch('filename=".-%.(.-)"') do ext = e; break end
+                else
+                    ext = body_data:match('name=".-"%s*%s*%s*(.-)$')
+                end
+                if ext and fileExtCheck(ext) then return end
             else
-                ext = body_data:match('name=".-"%s*%s*%s*(.-)$')
-            end
-            if ext and fileExtCheck(ext) then return end
-        else
-            local f = ngx.req.get_body_file()
-            if f then
-                local fd = io.open(f, "r")
-                if fd then local d = fd:read("*a"); fd:close(); if d and body(d) then return end end
+                local f = ngx.req.get_body_file()
+                if f then
+                    local fd = io.open(f, "r")
+                    if fd then local d = fd:read("*a"); fd:close(); if d and body(d) then return end end
+                end
             end
         end
-    end
-end)
+    end)
 
-if not ok then
-    ngx.log(ngx.ERR, "[WAF] Error: ", err)
+    if not ok then
+        ngx.log(ngx.ERR, "[WAF] Error: ", err)
+    end
 end
+
+-- 导出模块
+local _M = {}
+_M.run = run_waf
+return _M

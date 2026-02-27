@@ -63,7 +63,8 @@ http {
 
         # ---------------- WAF 检查（必须加）----------------
         access_by_lua_block {
-            require "waf"
+            local waf = require "waf"
+            waf.run()
         }
         # ---------------- WAF 检查结束 ----------------
 
