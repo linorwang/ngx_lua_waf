@@ -5,8 +5,19 @@ if not config.use_redis then
     return
 end
 
+-- 延迟加载模块，避免在 require 阶段执行任何可能 yield 的操作
+local waf_redis, waf_cache = nil, nil
+
+local function ensure_modules_loaded()
+    if not waf_redis then
+        waf_redis = require "redis"
+    end
+    if not waf_cache then
+        waf_cache = require "cache"
+    end
+end
+
 local match, ngxmatch, unescape, get_headers = string.match, ngx.re.match, ngx.unescape_uri, ngx.req.get_headers
-local waf_redis, waf_cache = require "redis", require "cache"
 
 local logpath, rulepath = config.logdir, config.RulePath
 local runtime_config, rules_cache = {}, {url={}, args={}, post={}, cookie={}, ["user-agent"]={}, whiteurl={}}
@@ -15,6 +26,7 @@ local ip_whitelist_map, ip_blocklist_map = {}, {}
 local function optionIsOn(opt) return opt == "on" end
 
 local function check_version_and_load(cache_type, load_redis, load_cache, set_cache)
+    ensure_modules_loaded()
     local cv, rv = waf_cache.get_version(cache_type), waf_redis.get_version(cache_type)
     if cv and rv and cv == rv then
         local c = load_cache()
@@ -26,6 +38,7 @@ local function check_version_and_load(cache_type, load_redis, load_cache, set_ca
 end
 
 local function load_config()
+    ensure_modules_loaded()
     local c = check_version_and_load(
         "config",
         function() return waf_redis.get_all_config() end,
@@ -40,6 +53,7 @@ local function load_config()
 end
 
 local function load_rules(rule_type)
+    ensure_modules_loaded()
     local r = check_version_and_load(
         "rules",
         function() return waf_redis.get_rules(rule_type) end,
@@ -55,6 +69,7 @@ local function load_rules(rule_type)
 end
 
 local function load_ip_list(list_type, default)
+    ensure_modules_loaded()
     local list = check_version_and_load(
         "ip",
         function() return list_type=="whitelist" and waf_redis.get_ip_whitelist() or waf_redis.get_ip_blocklist() end,
@@ -165,6 +180,7 @@ local function cookie()
 end
 
 local function denycc()
+    ensure_modules_loaded()
     if not optionIsOn(get_config("CCDeny", config.CCDeny)) then return false end
     local uri, rate, ip = ngx.var.uri, get_config("CCrate", config.CCrate), getClientIp()
     local cnt, sec = tonumber(rate:match('(.*)/')), tonumber(rate:match('/(.*)'))
@@ -198,37 +214,47 @@ local function load_all()
     load_ip_list("blocklist", config.ipBlocklist)
 end
 
-if not _G.waf_loaded then
-    load_all()
-    _G.waf_loaded = true
-end
+-- 注意：不要在模块加载阶段执行任何可能 yield 的操作（如 Redis 调用）
+-- 用 pcall 安全地尝试执行，如果不在请求阶段会优雅地失败
+local ok, err = pcall(function()
+    -- 在第一个请求时初始化
+    if not _G.waf_loaded then
+        load_all()
+        _G.waf_loaded = true
+    end
 
-if whiteip() then return end
-if blockip() then return end
-if denycc() then return end
-if whiteurl() then return end
-if url() then return end
-if args() then return end
-if ua() then return end
-if cookie() then return end
+    if whiteip() then return end
+    if blockip() then return end
+    if denycc() then return end
+    if whiteurl() then return end
+    if url() then return end
+    if args() then return end
+    if ua() then return end
+    if cookie() then return end
 
-local method, boundary, ext = ngx.req.get_method(), get_boundary(), nil
-if method == "POST" then
-    ngx.req.read_body()
-    local body_data = ngx.req.get_body_data()
-    if body_data then
-        if body(body_data) then return end
-        if boundary then
-            for e in body_data:gmatch('filename=".-%.(.-)"') do ext = e; break end
+    local method, boundary, ext = ngx.req.get_method(), get_boundary(), nil
+    if method == "POST" then
+        ngx.req.read_body()
+        local body_data = ngx.req.get_body_data()
+        if body_data then
+            if body(body_data) then return end
+            if boundary then
+                for e in body_data:gmatch('filename=".-%.(.-)"') do ext = e; break end
+            else
+                ext = body_data:match('name=".-"%s*%s*%s*(.-)$')
+            end
+            if ext and fileExtCheck(ext) then return end
         else
-            ext = body_data:match('name=".-"%s*%s*%s*(.-)$')
-        end
-        if ext and fileExtCheck(ext) then return end
-    else
-        local f = ngx.req.get_body_file()
-        if f then
-            local fd = io.open(f, "r")
-            if fd then local d = fd:read("*a"); fd:close(); if d and body(d) then return end end
+            local f = ngx.req.get_body_file()
+            if f then
+                local fd = io.open(f, "r")
+                if fd then local d = fd:read("*a"); fd:close(); if d and body(d) then return end end
+            end
         end
     end
+end)
+
+if not ok then
+    -- 如果在非请求阶段执行失败，静默忽略
+    -- 这是正常的，因为 require 时不在请求阶段
 end

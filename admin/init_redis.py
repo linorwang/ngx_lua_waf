@@ -7,6 +7,7 @@
 
 import sys
 import os
+import re
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(script_dir, '..'))
@@ -21,22 +22,62 @@ except ImportError:
 def read_config():
     config = {}
     config_path = os.path.join(script_dir, '..', 'config.lua')
+    
     with open(config_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            # 如果遇到 local _M = {，停止解析（这是返回 table 的部分）
-            if line.startswith('local _M = {'):
-                break
-            # 先移除行尾的注释
-            if '--' in line:
-                line = line.split('--', 1)[0].strip()
-            if line and '=' in line:
-                key, value = line.split('=', 1)
-                key = key.strip()
-                value = value.strip().rstrip(',')
-                if value.startswith('"') or value.startswith("'"):
-                    value = value[1:-1]
-                config[key] = value
+        content = f.read()
+    
+    # 先移除所有注释
+    # 移除多行注释 --[[ ... ]]
+    content = re.sub(r'--\[\[.*?\]\]', '', content, flags=re.DOTALL)
+    # 移除单行注释
+    content = re.sub(r'--.*$', '', content, flags=re.MULTILINE)
+    
+    # 在 local _M = 之前截断，只解析前面的变量定义
+    content = content.split('local _M =')[0]
+    
+    # 解析简单的 key = value 对
+    def parse_simple_value(value_str):
+        value_str = value_str.strip()
+        if value_str == 'true':
+            return True
+        elif value_str == 'false':
+            return False
+        elif value_str == 'nil':
+            return None
+        elif value_str.startswith('"') or value_str.startswith("'"):
+            return value_str[1:-1]
+        else:
+            # 数字，返回字符串
+            return value_str
+    
+    # 解析数组
+    def parse_array(value_str):
+        items = []
+        for item in re.findall(r'"([^"]+)"|\'([^\']+)\'', value_str):
+            items.append(item[0] or item[1])
+        return items
+    
+    # 先处理 html = [[ ... ]] 这种多行字符串（避免被简单值模式匹配）
+    html_match = re.search(r'html\s*=\s*\[\[(.*?)\]\]', content, re.DOTALL)
+    if html_match:
+        config['html'] = html_match.group(1)
+        # 从内容中移除 html 部分，避免被其他模式匹配
+        content = re.sub(r'html\s*=\s*\[\[.*?\]\]', '', content, flags=re.DOTALL)
+    
+    # 再解析数组（带有 { ... } 的）
+    array_pattern = r'^(\w+)\s*=\s*(\{.*?\})$'
+    for match in re.finditer(array_pattern, content, re.DOTALL | re.MULTILINE):
+        key = match.group(1)
+        value_str = match.group(2)
+        config[key] = parse_array(value_str)
+    
+    # 最后解析简单值
+    simple_pattern = r'^(\w+)\s*=\s*([^={\n]+)$'
+    for match in re.finditer(simple_pattern, content, re.MULTILINE):
+        key = match.group(1)
+        value_str = match.group(2)
+        config[key] = parse_simple_value(value_str)
+    
     return config
 
 def read_rule_file(rule_path, filename):
@@ -107,17 +148,28 @@ def main():
     
     whitelist_key = "waf:ip:whitelist"
     r.delete(whitelist_key)
-    ip_whitelist = ["127.0.0.1"]
+    ip_whitelist = config.get('ipWhitelist', ["127.0.0.1"])
     if ip_whitelist:
         r.sadd(whitelist_key, *ip_whitelist)
     print(f"[OK] IP 白名单已初始化 ({len(ip_whitelist)} 条)")
+    print(f"   IP: {', '.join(ip_whitelist)}")
     
     blocklist_key = "waf:ip:blocklist"
     r.delete(blocklist_key)
-    ip_blocklist = ["1.0.0.1"]
+    ip_blocklist = config.get('ipBlocklist', ["1.0.0.1"])
+    print(f"准备添加 IP 黑名单，共 {len(ip_blocklist)} 条:")
+    for i, ip in enumerate(ip_blocklist, 1):
+        print(f"   {i}. {ip}")
     if ip_blocklist:
         r.sadd(blocklist_key, *ip_blocklist)
     print(f"[OK] IP 黑名单已初始化 ({len(ip_blocklist)} 条)")
+    
+    # 验证数据
+    print("\n=== 验证数据 ===")
+    verify_blocklist = r.smembers(blocklist_key)
+    print(f"✓ 验证：Redis 中的 IP 黑名单有 {len(verify_blocklist)} 条:")
+    for i, ip in enumerate(sorted(verify_blocklist), 1):
+        print(f"  {i}. {ip}")
     
     r.set("waf:version:config", "1")
     r.set("waf:version:rules", "1")
