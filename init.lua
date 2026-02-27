@@ -1,5 +1,17 @@
+-- 初始化脚本 - 在 OpenResty 启动时执行
+-- 这个阶段不能执行任何可能导致 yield 的操作（如网络请求、Redis 连接等）
+
 local config = require "config"
 
--- 注意：无论是 Redis 模式还是文件模式，init.lua 在 init_by_lua 阶段都不执行实际逻辑
--- 因为原始的 init.lua.original 包含了 io.open, ngx.var 等只能在请求阶段使用的代码
--- 所有实际的 WAF 逻辑都在 waf.lua 的 access_by_lua 阶段执行
+-- 安全检查：确保配置模块已加载
+if not config then
+    ngx.log(ngx.ERR, "[WAF Init] Failed to load config module")
+else
+    ngx.log(ngx.NOTICE, "[WAF Init] Config module loaded successfully")
+    ngx.log(ngx.NOTICE, "[WAF Init] Redis enabled: ", config.use_redis)
+end
+
+-- 注意：
+-- 1. init_by_lua_block 阶段不能连接 Redis（会导致 yield）
+-- 2. 实际的 Redis 连接和配置加载在 access_by_lua_block 阶段（waf.lua）进行
+-- 3. 这里只做基础模块的预加载和配置验证

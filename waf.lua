@@ -1,6 +1,6 @@
 local config = require "config"
 
--- 延迟加载模块，避免在 require 阶段执行任何可能 yield 的操作
+-- 模块预加载（不执行任何网络操作）
 local waf_redis, waf_cache = nil, nil
 
 local function ensure_modules_loaded()
@@ -20,6 +20,7 @@ local ip_whitelist_map, ip_blocklist_map = {}, {}
 
 local function optionIsOn(opt) return opt == "on" end
 
+-- 检查版本并加载（带缓存机制）
 local function check_version_and_load(cache_type, load_redis, load_cache, set_cache)
     ensure_modules_loaded()
     local cv, rv = waf_cache.get_version(cache_type), waf_redis.get_version(cache_type)
@@ -89,8 +90,8 @@ end
 local function log(method, url, data, tag)
     if not optionIsOn(get_config("attacklog", config.attacklog)) then return end
     local ip, ua, sn, t, dir = getClientIp(), ngx.var.http_user_agent, ngx.var.server_name, ngx.localtime(), get_config("logdir", config.logdir)
-    local line = ua and (ip.." ["..t.."] \""..method.." "..sn..url.."\" \""..data.."\"  \""..ua.."\" \""..tag.."\"\n")
-                    or (ip.." ["..t.."] \""..method.." "..sn..url.."\" \""..data.."\" - \""..tag.."\"\n")
+    local line = ua and (ip.." ["..t.."] \""..method.." "..sn..url.."\" \""..(data or "-").."\"  \""..ua.."\" \""..tag.."\"\n")
+                    or (ip.." ["..t.."] \""..method.." "..sn..url.."\" \""..(data or "-").."\" - \""..tag.."\"\n")
     write(dir..'/'..sn.."_"..ngx.today().."_sec.log", line)
 end
 
@@ -129,7 +130,7 @@ local function args()
                 local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
             else data=v end
             if data and type(data)~="boolean" and r~="" and ngxmatch(unescape(data), r, "isjo") then
-                log('GET', ngx.var.request_uri, "-", r); say_html(); return true
+                log('GET', ngx.var.request_uri, data, r); say_html(); return true
             end
         end
     end
@@ -209,14 +210,9 @@ local function load_all()
     load_ip_list("blocklist", config.ipBlocklist)
 end
 
--- 注意：不要在模块加载阶段执行任何可能 yield 的操作（如 Redis 调用）
--- 用 pcall 安全地尝试执行，如果不在请求阶段会优雅地失败
+-- 直接执行 WAF 检查
 local ok, err = pcall(function()
-    -- 在第一个请求时初始化
-    if not _G.waf_loaded then
-        load_all()
-        _G.waf_loaded = true
-    end
+    load_all()
 
     if whiteip() then return end
     if blockip() then return end
@@ -250,6 +246,5 @@ local ok, err = pcall(function()
 end)
 
 if not ok then
-    -- 如果在非请求阶段执行失败，静默忽略
-    -- 这是正常的，因为 require 时不在请求阶段
+    ngx.log(ngx.ERR, "[WAF] Error: ", err)
 end
