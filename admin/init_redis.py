@@ -104,7 +104,7 @@ def main():
     if redis_password == 'nil':
         redis_password = None
     
-    rule_path = config.get('RulePath', '/usr/local/nginx/conf/waf/wafconf/')
+    rule_path = config.get('RulePath', '/usr/local/openresty/nginx/conf/waf/wafconf/')
     
     print("正在初始化 Redis 数据...")
     print(f"Redis: {redis_host}:{redis_port}/{redis_db}")
@@ -126,7 +126,7 @@ def main():
     config_key = "waf:config"
     r.delete(config_key)
     r.hset(config_key, "attacklog", config.get('attacklog', 'on'))
-    r.hset(config_key, "logdir", config.get('logdir', '/usr/local/nginx/logs/hack/'))
+    r.hset(config_key, "logdir", config.get('logdir', '/usr/local/openresty/nginx/logs/hack/'))
     r.hset(config_key, "UrlDeny", config.get('UrlDeny', 'on'))
     r.hset(config_key, "Redirect", config.get('Redirect', 'on'))
     r.hset(config_key, "CookieMatch", config.get('CookieMatch', 'on'))
