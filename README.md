@@ -24,6 +24,11 @@ redis-cli ping
 
 # 检查 Python
 python3 --version
+mkdir -p /opt/waf
+python3 -m venv /opt/waf/
+source /opt/waf/bin/activate
+pip install --upgrade pip
+pip install redis
 ```
 
 ### 第二步：安装 WAF
