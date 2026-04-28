@@ -1,0 +1,14 @@
+\.\./
+\.\.\\
+%2e%2e%2f
+%252e%252e%252f
+%25252e%25252e%25252f
+\.\./\.\./
+\/etc\/passwd
+\/etc\/shadow
+\/etc\/hosts
+\/windows\/system32
+\/WEB-INF\/web\.xml
+\/WEB-INF\/
+\.htaccess
+\.htpasswd

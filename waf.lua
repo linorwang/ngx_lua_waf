@@ -15,7 +15,7 @@ end
 local match, ngxmatch, unescape, get_headers = string.match, ngx.re.match, ngx.unescape_uri, ngx.req.get_headers
 
 local logpath, rulepath = config.logdir, config.RulePath
-local runtime_config, rules_cache = {}, {url={}, args={}, post={}, cookie={}, ["user-agent"]={}, whiteurl={}}
+local runtime_config, rules_cache = {}, {url={}, args={}, post={}, cookie={}, ["user-agent"]={}, whiteurl={}, cmd={}, ssrf={}, pathtraversal={}, sensitivefile={}, webshell={}}
 local ip_whitelist_map, ip_blocklist_map = {}, {}
 
 local function optionIsOn(opt) return opt == "on" end
@@ -45,7 +45,10 @@ local function load_config()
         attacklog=config.attacklog, logdir=config.logdir, UrlDeny=config.UrlDeny,
         Redirect=config.Redirect, CookieMatch=config.CookieMatch, postMatch=config.postMatch,
         whiteModule=config.whiteModule, CCDeny=config.CCDeny, CCrate=config.CCrate, 
-        CCBanTime=config.CCBanTime, html=config.html
+        CCBanTime=config.CCBanTime, html=config.html,
+        CmdMatch=config.CmdMatch, SSRFCheck=config.SSRFCheck,
+        PathTraversalCheck=config.PathTraversalCheck, SensitiveFileCheck=config.SensitiveFileCheck,
+        WebshellCheck=config.WebshellCheck, ResponseFilter=config.ResponseFilter
     }
 end
 
@@ -176,6 +179,111 @@ local function cookie()
     return false
 end
 
+local function cmd()
+    if not optionIsOn(get_config("CmdMatch", config.CmdMatch)) then return false end
+    local rules = load_rules("cmd")
+    if not rules then return false end
+    
+    local args_table = ngx.req.get_uri_args()
+    for _, r in ipairs(rules) do
+        for k, v in pairs(args_table) do
+            local data
+            if type(v) == 'table' then
+                local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
+            else data=v end
+            if data and type(data)~="boolean" and r~="" and ngxmatch(unescape(data), r, "isjo") then
+                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+            end
+        end
+    end
+    return false
+end
+
+local function pathtraversal()
+    if not optionIsOn(get_config("PathTraversalCheck", config.PathTraversalCheck)) then return false end
+    local rules = load_rules("pathtraversal")
+    if rules then for _, r in ipairs(rules) do if r~="" and ngxmatch(ngx.var.request_uri, r, "isjo") then
+        log('GET', ngx.var.request_uri, "-", r); say_html(); return true
+    end end end
+    return false
+end
+
+local function sensitivefile()
+    if not optionIsOn(get_config("SensitiveFileCheck", config.SensitiveFileCheck)) then return false end
+    local rules = load_rules("sensitivefile")
+    if rules then for _, r in ipairs(rules) do if r~="" and ngxmatch(ngx.var.request_uri, r, "isjo") then
+        log('GET', ngx.var.request_uri, "-", r); say_html(); return true
+    end end end
+    return false
+end
+
+local function ssrf()
+    if not optionIsOn(get_config("SSRFCheck", config.SSRFCheck)) then return false end
+    local rules = load_rules("ssrf")
+    if not rules then return false end
+    
+    local args_table = ngx.req.get_uri_args()
+    for _, r in ipairs(rules) do
+        for k, v in pairs(args_table) do
+            local data
+            if type(v) == 'table' then
+                local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
+            else data=v end
+            if data and type(data)~="boolean" and r~="" and ngxmatch(unescape(data), r, "isjo") then
+                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+            end
+        end
+    end
+    return false
+end
+
+local function webshell()
+    if not optionIsOn(get_config("WebshellCheck", config.WebshellCheck)) then return false end
+    local rules = load_rules("webshell")
+    if not rules then return false end
+    
+    local args_table = ngx.req.get_uri_args()
+    for _, r in ipairs(rules) do
+        for k, v in pairs(args_table) do
+            local data
+            if type(v) == 'table' then
+                local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
+            else data=v end
+            if data and type(data)~="boolean" and r~="" and ngxmatch(unescape(data), r, "isjo") then
+                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+            end
+        end
+    end
+    return false
+end
+
+local function post_cmd(body_data)
+    if not optionIsOn(get_config("CmdMatch", config.CmdMatch)) then return false end
+    local rules = load_rules("cmd")
+    if rules then for _, r in ipairs(rules) do if r~="" and body_data~="" and ngxmatch(unescape(body_data), r, "isjo") then
+        log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
+    end end end
+    return false
+end
+
+local function post_ssrf(body_data)
+    if not optionIsOn(get_config("SSRFCheck", config.SSRFCheck)) then return false end
+    local rules = load_rules("ssrf")
+    if rules then for _, r in ipairs(rules) do if r~="" and body_data~="" and ngxmatch(unescape(body_data), r, "isjo") then
+        log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
+    end end end
+    return false
+end
+
+local function post_webshell(body_data)
+    if not optionIsOn(get_config("WebshellCheck", config.WebshellCheck)) then return false end
+    local rules = load_rules("webshell")
+    if rules then for _, r in ipairs(rules) do if r~="" and body_data~="" and ngxmatch(unescape(body_data), r, "isjo") then
+        log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
+    end end end
+    return false
+end
+
 local function denycc()
     ensure_modules_loaded()
     if not optionIsOn(get_config("CCDeny", config.CCDeny)) then return false end
@@ -228,7 +336,7 @@ local function blockip() if ip_blocklist_map[getClientIp()] then ngx.exit(403); 
 
 local function load_all()
     load_config()
-    for _, t in ipairs{"url","args","post","cookie","user-agent","whiteurl"} do load_rules(t) end
+    for _, t in ipairs{"url","args","post","cookie","user-agent","whiteurl","cmd","ssrf","pathtraversal","sensitivefile","webshell"} do load_rules(t) end
     load_ip_list("whitelist", config.ipWhitelist)
     load_ip_list("blocklist", config.ipBlocklist)
 end
@@ -243,7 +351,12 @@ local function run_waf()
         if denycc() then return end
         if whiteurl() then return end
         if url() then return end
+        if sensitivefile() then return end
+        if pathtraversal() then return end
         if args() then return end
+        if cmd() then return end
+        if ssrf() then return end
+        if webshell() then return end
         if ua() then return end
         if cookie() then return end
 
@@ -253,6 +366,9 @@ local function run_waf()
             local body_data = ngx.req.get_body_data()
             if body_data then
                 if body(body_data) then return end
+                if post_cmd(body_data) then return end
+                if post_ssrf(body_data) then return end
+                if post_webshell(body_data) then return end
                 if boundary then
                     for e in body_data:gmatch('filename=".-%.(.-)"') do ext = e; break end
                 else

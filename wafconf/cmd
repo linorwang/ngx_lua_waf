@@ -1,0 +1,9 @@
+\|\|.*?\|\|
+&&.*?&&
+;\s*(?:rm|ls|dir|cat|echo|id|whoami|uname|pwd|wget|curl|nc|netcat|python|perl|php|bash|sh|cmd\.exe|powershell\.exe)\s
+\|\s*(?:rm|ls|dir|cat|echo|id|whoami|uname|pwd|wget|curl|nc|netcat|python|perl|php|bash|sh|cmd\.exe|powershell\.exe)\s
+&\s*(?:rm|ls|dir|cat|echo|id|whoami|uname|pwd|wget|curl|nc|netcat|python|perl|php|bash|sh|cmd\.exe|powershell\.exe)\s
+`[^`]*`
+\$\([^)]*\)
+\$\{[^}]*\}
+\.\s*/\s*(?:rm|ls|dir|cat|echo|id|whoami|uname|pwd|wget|curl|nc|netcat|python|perl|php|bash|sh)\s

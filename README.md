@@ -133,6 +133,40 @@ curl -v "http://localhost/?id=1' OR '1'='1"
 curl -v "http://localhost/?q=<script>alert(1)</script>"
 ```
 
+### 新增防护功能测试命令
+
+```bash
+# 命令注入测试（应该返回 403 被拦截）
+curl -v "http://localhost/?cmd=1;ls"
+curl -v "http://localhost/?cmd=1&&whoami"
+curl -v "http://localhost/?cmd=\`echo hacked\`"
+curl -v "http://localhost/?cmd=\$(id)"
+
+# SSRF 攻击测试（应该返回 403 被拦截）
+curl -v "http://localhost/?url=http://127.0.0.1"
+curl -v "http://localhost/?url=http://192.168.1.1"
+curl -v "http://localhost/?url=http://10.0.0.1"
+curl -v "http://localhost/?url=http://localhost"
+
+# 路径遍历测试（应该返回 403 被拦截）
+curl -v "http://localhost/../etc/passwd"
+curl -v "http://localhost/?file=../../etc/passwd"
+curl -v "http://localhost/?file=..%2f..%2fetc%2fpasswd"
+curl -v "http://localhost/?path=/windows/system32"
+
+# 敏感文件访问测试（应该返回 403 被拦截）
+curl -v "http://localhost/.git/config"
+curl -v "http://localhost/.env"
+curl -v "http://localhost/phpinfo.php"
+curl -v "http://localhost/backup.sql"
+curl -v "http://localhost/backup.zip"
+
+# Webshell 特征测试（应该返回 403 被拦截）
+curl -v "http://localhost/?code=eval(\$_POST[1])"
+curl -v "http://localhost/?code=assert(\$_POST[1])"
+curl -v "http://localhost/?cmd=system('whoami')"
+```
+
 如果攻击请求返回 `403 Forbidden`，说明 WAF 已经在工作了！🎉
 
 ---
@@ -161,8 +195,42 @@ redis-cli HSET waf:config CCDeny on
 # 设置 CC 频率（100次/60秒）
 redis-cli HSET waf:config CCrate 100/60
 
+# 新增防护功能开关配置
+# 开启命令注入防护
+redis-cli HSET waf:config CmdMatch on
+# 开启 SSRF 防护
+redis-cli HSET waf:config SSRFCheck on
+# 开启路径遍历防护
+redis-cli HSET waf:config PathTraversalCheck on
+# 开启敏感文件防护
+redis-cli HSET waf:config SensitiveFileCheck on
+# 开启 Webshell 检测
+redis-cli HSET waf:config WebshellCheck on
+
 # ⚠️ 重要：修改配置后必须增加版本号，让 WAF 重新加载
 redis-cli INCR waf:version:config
+```
+
+### 新增规则管理
+```bash
+# 查看命令注入规则
+redis-cli SMEMBERS waf:rules:cmd
+# 查看 SSRF 规则
+redis-cli SMEMBERS waf:rules:ssrf
+# 查看路径遍历规则
+redis-cli SMEMBERS waf:rules:pathtraversal
+# 查看敏感文件规则
+redis-cli SMEMBERS waf:rules:sensitivefile
+# 查看 Webshell 规则
+redis-cli SMEMBERS waf:rules:webshell
+
+# 添加新规则示例（以敏感文件为例）
+redis-cli SADD waf:rules:sensitivefile "\.secret"
+# 删除规则
+redis-cli SREM waf:rules:sensitivefile "\.secret"
+
+# ⚠️ 重要：修改后增加版本号
+redis-cli INCR waf:version:rules
 ```
 
 ### IP 黑名单管理
@@ -264,6 +332,19 @@ ngx_lua_waf/
 - ✅ CC 攻击防护
 - ✅ Redis 集中管理，热更新规则
 - ✅ 详细的攻击日志
+- ✅ 命令注入防护（CmdMatch）
+- ✅ SSRF 攻击防护（SSRFCheck）
+- ✅ 路径遍历防护（PathTraversalCheck）
+- ✅ 敏感文件访问防护（SensitiveFileCheck）
+- ✅ Webshell 检测防护（WebshellCheck）
+
+### 新增防护功能详细说明
+
+- **CmdMatch（命令注入防护）**：检测并拦截 `&&`、`||`、`;`、`$()`、反引号等命令注入特征
+- **SSRFCheck（SSRF 防护）**：检测并拦截内网地址请求，如 `127.0.0.1`、`192.168.x.x`、`10.x.x.x`、`172.16-31.x.x` 等
+- **PathTraversalCheck（路径遍历防护）**：检测并拦截 `../`、`..\`、`%2e%2e%2f` 等路径遍历特征，以及 `/etc/passwd`、`/windows/system32`、`WEB-INF` 等敏感路径
+- **SensitiveFileCheck（敏感文件防护）**：检测并拦截 `.git/`、`.env`、`phpinfo.php`、`.bak`、`.sql`、`.zip` 等敏感文件访问
+- **WebshellCheck（Webshell 检测）**：检测并拦截 `eval()`、`assert()`、`system()`、`base64_decode()` 等危险函数调用
 
 ---
 

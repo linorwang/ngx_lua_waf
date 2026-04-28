@@ -136,9 +136,15 @@ def main():
     r.hset(config_key, "CCrate", config.get('CCrate', '10/60'))
     r.hset(config_key, "CCBanTime", config.get('CCBanTime', '3600'))
     r.hset(config_key, "html", config.get('html', ''))
+    r.hset(config_key, "CmdMatch", config.get('CmdMatch', 'on'))
+    r.hset(config_key, "SSRFCheck", config.get('SSRFCheck', 'on'))
+    r.hset(config_key, "PathTraversalCheck", config.get('PathTraversalCheck', 'on'))
+    r.hset(config_key, "SensitiveFileCheck", config.get('SensitiveFileCheck', 'on'))
+    r.hset(config_key, "WebshellCheck", config.get('WebshellCheck', 'on'))
+    r.hset(config_key, "ResponseFilter", config.get('ResponseFilter', 'off'))
     print("[OK] 配置已初始化")
     
-    rule_types = ["url", "args", "post", "cookie", "user-agent", "whiteurl"]
+    rule_types = ["url", "args", "post", "cookie", "user-agent", "whiteurl", "cmd", "ssrf", "pathtraversal", "sensitivefile", "webshell"]
     for rule_type in rule_types:
         key = f"waf:rules:{rule_type}"
         r.delete(key)
