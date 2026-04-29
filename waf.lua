@@ -18,7 +18,49 @@ local logpath, rulepath = config.logdir, config.RulePath
 local runtime_config, rules_cache = {}, {url={}, args={}, post={}, cookie={}, ["user-agent"]={}, whiteurl={}, cmd={}, ssrf={}, pathtraversal={}, sensitivefile={}, webshell={}}
 local ip_whitelist_map, ip_blocklist_map = {}, {}
 
+-- Worker级缓存标记
+local worker_cache = {
+    last_load_time = 0,
+    load_interval = config.cache_ttl or 60
+}
+
+-- 静态资源后缀列表（跳过检测）
+local static_extensions = {
+    js = true, css = true, png = true, jpg = true, jpeg = true,
+    gif = true, ico = true, svg = true, woff = true, woff2 = true,
+    ttf = true, eot = true, otf = true, webp = true, mp4 = true,
+    webm = true, mp3 = true, wav = true, flac = true, aac = true,
+    pdf = true, doc = true, docx = true, xls = true, xlsx = true,
+    ppt = true, pptx = true, zip = true, rar = true, tar = true,
+    gz = true, ["7z"] = true
+}
+
+-- CC封禁本地缓存（减少Redis查询）
+local cc_ban_cache = {
+    ip_map = {},
+    last_sync_time = 0,
+    sync_interval = 10  -- 每10秒同步一次
+}
+
 local function optionIsOn(opt) return opt == "on" end
+
+-- 检查是否为静态资源请求
+local function is_static_request()
+    local uri = ngx.var.uri
+    if not uri then return false end
+    local ext = uri:match("%.(%w+)$")
+    return ext and static_extensions[ext:lower()] == true
+end
+
+-- 检查是否需要重新加载配置
+local function should_reload()
+    local now = ngx.time()
+    if now - worker_cache.last_load_time < worker_cache.load_interval then
+        return false
+    end
+    worker_cache.last_load_time = now
+    return true
+end
 
 -- 检查版本并加载（带缓存机制）
 local function check_version_and_load(cache_type, load_redis, load_cache, set_cache)
@@ -290,35 +332,59 @@ local function denycc()
     local uri, rate, ip = ngx.var.uri, get_config("CCrate", config.CCrate), getClientIp()
     local ban_time = tonumber(get_config("CCBanTime", config.CCBanTime or 3600))
     
-    -- 先检查是否已被封禁
-    local banned = waf_redis.cc_ban_check(ip)
-    if banned then
-        ngx.exit(503)
+    -- 先检查本地封禁缓存
+    local now = ngx.time()
+    if cc_ban_cache.ip_map[ip] and cc_ban_cache.ip_map[ip] > now then
+        -- 返回优雅的CC拦截页面，保持503状态码
+        ngx.header.content_type="text/html"
+        ngx.status=ngx.HTTP_SERVICE_UNAVAILABLE
+        ngx.say(get_config("html", config.html))
+        ngx.exit(ngx.status)
         return true
     end
     
-    local cnt, sec = tonumber(rate:match('(.*)/')), tonumber(rate:match('/(.*)'))
-    local count = waf_redis.cc_incr(ip, uri, sec)
-    if count then
-        if count > cnt then
-            -- 超过阈值，设置封禁
-            waf_redis.cc_ban_set(ip, ban_time)
-            ngx.exit(503)
+    -- 定期同步封禁状态到Redis
+    if now - cc_ban_cache.last_sync_time > cc_ban_cache.sync_interval then
+        cc_ban_cache.last_sync_time = now
+        -- 清理过期本地缓存
+        for k, v in pairs(cc_ban_cache.ip_map) do
+            if v <= now then
+                cc_ban_cache.ip_map[k] = nil
+            end
+        end
+        -- 检查Redis是否有新的封禁
+        local banned = waf_redis.cc_ban_check(ip)
+        if banned then
+            cc_ban_cache.ip_map[ip] = now + ban_time
+            -- 返回优雅的CC拦截页面，保持503状态码
+            ngx.header.content_type="text/html"
+            ngx.status=ngx.HTTP_SERVICE_UNAVAILABLE
+            ngx.say(get_config("html", config.html))
+            ngx.exit(ngx.status)
             return true
         end
-    else
-        local limit, token = ngx.shared.limit, ip..uri
-        local req = limit:get(token)
-        if req then 
-            if req > cnt then 
-                ngx.exit(503)
-                return true 
-            else 
-                limit:incr(token,1) 
-            end
+    end
+    
+    local cnt, sec = tonumber(rate:match('(.*)/')), tonumber(rate:match('/(.*)'))
+    -- 优先使用本地共享内存计数
+    local limit, token = ngx.shared.limit, ip..uri
+    local req = limit:get(token)
+    if req then 
+        if req >= cnt then 
+            -- 超过阈值，设置本地和Redis封禁
+            cc_ban_cache.ip_map[ip] = now + ban_time
+            waf_redis.cc_ban_set(ip, ban_time)
+            -- 返回优雅的CC拦截页面，保持503状态码
+            ngx.header.content_type="text/html"
+            ngx.status=ngx.HTTP_SERVICE_UNAVAILABLE
+            ngx.say(get_config("html", config.html))
+            ngx.exit(ngx.status)
+            return true 
         else 
-            limit:set(token,1,sec) 
+            limit:incr(token,1) 
         end
+    else 
+        limit:set(token,1,sec) 
     end
     return false
 end
@@ -335,6 +401,10 @@ local function whiteip() return ip_whitelist_map[getClientIp()] == true end
 local function blockip() if ip_blocklist_map[getClientIp()] then ngx.exit(403); return true end; return false end
 
 local function load_all()
+    -- 只有需要时才重新加载配置
+    if not should_reload() then
+        return
+    end
     load_config()
     for _, t in ipairs{"url","args","post","cookie","user-agent","whiteurl","cmd","ssrf","pathtraversal","sensitivefile","webshell"} do load_rules(t) end
     load_ip_list("whitelist", config.ipWhitelist)
@@ -344,6 +414,11 @@ end
 -- WAF 主函数（导出供调用）
 local function run_waf()
     local ok, err = pcall(function()
+        -- 1. 先检测是否是静态资源，直接跳过
+        if is_static_request() then
+            return
+        end
+
         load_all()
 
         if whiteip() then return end
