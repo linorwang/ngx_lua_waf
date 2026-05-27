@@ -12,6 +12,7 @@ redis_idle_timeout = 10000  -- 毫秒
 
 -- ==================== 本地缓存配置 ====================
 cache_ttl = 60  -- 秒，本地缓存过期时间
+ip_cache_check_interval = 1  -- 秒，IP 黑白名单版本检查间隔
 enable_cache = true  -- 是否启用本地缓存
 
 -- ==================== WAF 基础配置（仅用于初始化 Redis，运行时从 Redis 读取） ====================
@@ -124,6 +125,7 @@ local _M = {
     redis_pool_size = redis_pool_size,
     redis_idle_timeout = redis_idle_timeout,
     cache_ttl = cache_ttl,
+    ip_cache_check_interval = ip_cache_check_interval,
     enable_cache = enable_cache,
     RulePath = RulePath,
     attacklog = attacklog,

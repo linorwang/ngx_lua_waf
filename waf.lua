@@ -21,7 +21,10 @@ local ip_whitelist_map, ip_blocklist_map = {}, {}
 -- Worker级缓存标记
 local worker_cache = {
     last_load_time = 0,
-    load_interval = config.cache_ttl or 60
+    load_interval = config.cache_ttl or 60,
+    ip_cache_version = nil,
+    last_ip_version_check_time = 0,
+    ip_version_check_interval = config.ip_cache_check_interval or 1
 }
 
 -- 静态资源后缀列表（跳过检测）
@@ -112,17 +115,58 @@ end
 
 local function load_ip_list(list_type, default)
     ensure_modules_loaded()
-    local list = check_version_and_load(
-        "ip",
-        function() return list_type=="whitelist" and waf_redis.get_ip_whitelist() or waf_redis.get_ip_blocklist() end,
-        function() return list_type=="whitelist" and waf_cache.get_ip_whitelist() or waf_cache.get_ip_blocklist() end,
-        function(x) 
-            if list_type=="whitelist" then waf_cache.set_ip_whitelist(x) else waf_cache.set_ip_blocklist(x) end
-        end
-    )
+    local list, loaded_from_redis
+    if list_type=="whitelist" then
+        list = waf_redis.get_ip_whitelist()
+        loaded_from_redis = list ~= nil
+        if loaded_from_redis then waf_cache.set_ip_whitelist(list) else list = waf_cache.get_ip_whitelist() end
+    else
+        list = waf_redis.get_ip_blocklist()
+        loaded_from_redis = list ~= nil
+        if loaded_from_redis then waf_cache.set_ip_blocklist(list) else list = waf_cache.get_ip_blocklist() end
+    end
+    if not list and worker_cache.ip_cache_version ~= nil then
+        return false, false
+    end
     local map = list_type=="whitelist" and ip_whitelist_map or ip_blocklist_map
     for k in pairs(map) do map[k]=nil end
-    for _, ip in ipairs(list or default) do map[ip]=true end
+    for _, ip in ipairs(list or default or {}) do if ip and ip~="" then map[ip]=true end end
+    return true, loaded_from_redis
+end
+
+local function load_ip_lists_if_changed()
+    ensure_modules_loaded()
+    local now = ngx.time()
+    if worker_cache.ip_cache_version ~= nil
+        and now - worker_cache.last_ip_version_check_time < worker_cache.ip_version_check_interval then
+        return
+    end
+    worker_cache.last_ip_version_check_time = now
+
+    local redis_version = waf_redis.get_version("ip")
+    local cache_version = waf_cache.get_version("ip")
+    local next_version = redis_version or cache_version
+    if next_version and worker_cache.ip_cache_version == next_version then
+        return
+    end
+    if not next_version and worker_cache.ip_cache_version ~= nil then
+        return
+    end
+
+    local whitelist_loaded, whitelist_from_redis = load_ip_list("whitelist", config.ipWhitelist)
+    local blocklist_loaded, blocklist_from_redis = load_ip_list("blocklist", config.ipBlocklist)
+    if not whitelist_loaded and not blocklist_loaded then
+        return
+    end
+
+    if redis_version and whitelist_from_redis and blocklist_from_redis then
+        waf_cache.set_version("ip", redis_version)
+        worker_cache.ip_cache_version = redis_version
+    elseif redis_version then
+        worker_cache.ip_cache_version = cache_version or worker_cache.ip_cache_version or "local"
+    else
+        worker_cache.ip_cache_version = next_version or "local"
+    end
 end
 
 local function get_config(k, d) return runtime_config[k] or d end
@@ -407,22 +451,22 @@ local function load_all()
     end
     load_config()
     for _, t in ipairs{"url","args","post","cookie","user-agent","whiteurl","cmd","ssrf","pathtraversal","sensitivefile","webshell"} do load_rules(t) end
-    load_ip_list("whitelist", config.ipWhitelist)
-    load_ip_list("blocklist", config.ipBlocklist)
 end
 
 -- WAF 主函数（导出供调用）
 local function run_waf()
     local ok, err = pcall(function()
-        -- 1. 先检测是否是静态资源，直接跳过
+        load_ip_lists_if_changed()
+
+        if whiteip() then return end
+        if blockip() then return end
+        -- 1. IP check runs first, then static resources skip deeper checks.
         if is_static_request() then
             return
         end
 
         load_all()
 
-        if whiteip() then return end
-        if blockip() then return end
         if denycc() then return end
         if whiteurl() then return end
         if url() then return end

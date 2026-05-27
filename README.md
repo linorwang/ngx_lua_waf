@@ -383,4 +383,17 @@ MIT License
 
 ---
 
+## IP 黑名单即时生效说明
+
+添加或删除 IP 后仍需要执行：
+
+```bash
+redis-cli INCR waf:version:ip
+```
+
+WAF 会按 `ip_cache_check_interval` 配置在每个 worker 内短间隔检查 `waf:version:ip`，默认最多 1 秒发现版本变化并重新加载黑白名单，不再受 `cache_ttl` 的 60 秒本地刷新间隔限制。黑名单 IP 会先于静态资源跳过逻辑被拦截，因此会对全站请求生效。
+
+
+---
+
 **就这么简单！快去试试吧！** 🚀
