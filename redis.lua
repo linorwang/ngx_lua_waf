@@ -11,11 +11,11 @@ local function get_redis()
     if not ok then ngx.log(ngx.ERR, "redis connect failed: ", err); return nil end
     if config.redis_password then
         ok, err = config.redis_username and red:auth(config.redis_username, config.redis_password) or red:auth(config.redis_password)
-        if not ok then ngx.log(ngx.ERR, "redis auth failed: ", err); return nil end
+        if not ok then ngx.log(ngx.ERR, "redis auth failed: ", err); red:close(); return nil end
     end
     if config.redis_db and config.redis_db ~= 0 then
         ok, err = red:select(config.redis_db)
-        if not ok then ngx.log(ngx.ERR, "redis select db failed: ", err); return nil end
+        if not ok then ngx.log(ngx.ERR, "redis select db failed: ", err); red:close(); return nil end
     end
     return red
 end
@@ -31,15 +31,19 @@ local function build_key(...) return PREFIX .. table.concat({...}, ":") end
 local function with_redis(callback)
     local red = get_redis()
     if not red then return nil end
-    local res, err = callback(red)
+    local ok, res, err = pcall(callback, red)
     close_redis(red)
+    if not ok then
+        ngx.log(ngx.ERR, "redis callback failed: ", res)
+        return nil, res
+    end
     return res, err
 end
 
 function _M.get_config(key) return with_redis(function(r) local v=r:hget(build_key("config"),key); return v~=ngx.null and v or nil end) end
 function _M.get_all_config() return with_redis(function(r)
     local res=r:hgetall(build_key("config"))
-    if not res or res==ngx.null then return nil end
+    if not res or res==ngx.null or #res == 0 then return nil end
     local c={}; for i=1,#res,2 do c[res[i]]=res[i+1] end; return c
 end) end
 function _M.set_config(k,v) return with_redis(function(r) local o=r:hset(build_key("config"),k,v); if o then r:incr(build_key("version","config")) end; return o end) end

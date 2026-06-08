@@ -1,11 +1,16 @@
-local waf_cache = ngx.shared.waf_cache
+local waf_cache = ngx.shared and ngx.shared.waf_cache
 local config = require "config"
 
 local _M = {}
 local PREFIX = "waf_cache:"
+local cache_available = waf_cache ~= nil
+
+if not cache_available then
+    ngx.log(ngx.ERR, "[WAF] lua_shared_dict waf_cache is not configured; local cache disabled")
+end
 
 local function get_ttl() return config.cache_ttl or 5 end
-local function is_cache_enabled() return config.enable_cache ~= false end
+local function is_cache_enabled() return cache_available and config.enable_cache ~= false end
 local function build_key(...) return PREFIX .. table.concat({...}, ":") end
 
 function _M.get(key)
@@ -23,7 +28,11 @@ function _M.set(key, value, ttl)
     return true
 end
 
-function _M.del(key) waf_cache:delete(build_key(key)); return true end
+function _M.del(key)
+    if not is_cache_enabled() then return true end
+    waf_cache:delete(build_key(key))
+    return true
+end
 function _M.get_version(t) return _M.get("version:"..t) end
 function _M.set_version(t, v) return _M.set("version:"..t, v, get_ttl()) end
 
@@ -43,7 +52,7 @@ local function deserialize_list(s)
     local t = {}; for item in string.gmatch(s, "[^\n]+") do t[#t+1] = item end; return t
 end
 
-local function serialize_list(list) return table.concat(list, "\n") end
+local function serialize_list(list) return table.concat(list or {}, "\n") end
 
 function _M.get_rules(t) return deserialize_list(_M.get("rules:"..t)) end
 function _M.set_rules(t, rules) return _M.set("rules:"..t, serialize_list(rules)) end
@@ -61,6 +70,10 @@ end
 
 function _M.check_ip_whitelist(ip) return check_ip_in_list("ip:whitelist", ip) end
 function _M.check_ip_blocklist(ip) return check_ip_in_list("ip:blocklist", ip) end
-function _M.flush_all() waf_cache:flush_all(); return true end
+function _M.flush_all()
+    if not is_cache_enabled() then return true end
+    waf_cache:flush_all()
+    return true
+end
 
 return _M

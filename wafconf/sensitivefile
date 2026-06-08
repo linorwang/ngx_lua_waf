@@ -14,16 +14,4 @@ phpmyadmin
 pma
 webadmin
 adminer
-\.bak
-\.swp
-\.old
-\.sql
-\.zip
-\.rar
-\.tar\.gz
-\.7z
-\.log
-\.bak
-\.backup
-\.tmp
-\.temp
+\.(bak|swp|old|sql|zip|rar|tar\.gz|7z|log|backup|tmp|temp)(?:$|[?#])

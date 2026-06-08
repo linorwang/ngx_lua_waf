@@ -16,6 +16,9 @@ ip_cache_check_interval = 1  -- 秒，IP 黑白名单版本检查间隔
 enable_cache = true  -- 是否启用本地缓存
 
 -- ==================== WAF 基础配置（仅用于初始化 Redis，运行时从 Redis 读取） ====================
+enable_cache = true
+decode_depth = 2
+static_skip = "light"
 RulePath = "/usr/local/openresty/nginx/conf/waf/wafconf/"
 attacklog = "off"  -- 默认关闭日志，需要时手动开启
 logdir = "/usr/local/openresty/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
@@ -127,6 +130,8 @@ local _M = {
     cache_ttl = cache_ttl,
     ip_cache_check_interval = ip_cache_check_interval,
     enable_cache = enable_cache,
+    decode_depth = decode_depth,
+    static_skip = static_skip,
     RulePath = RulePath,
     attacklog = attacklog,
     logdir = logdir,
