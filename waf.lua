@@ -361,15 +361,6 @@ local function ua()
     return false
 end
 
-local function body(data)
-    if not optionIsOn(get_config("postMatch", config.postMatch)) then return false end
-    local rules = load_rules("post")
-    if rules then for _, r in ipairs(rules) do if data~="" and safe_match(safe_decode(data), r, "post") then
-        log('POST', ngx.var.request_uri, data, r); say_html(); return true
-    end end end
-    return false
-end
-
 local function cookie()
     if not optionIsOn(get_config("CookieMatch", config.CookieMatch)) then return false end
     local ck = ngx.var.http_cookie
@@ -459,30 +450,35 @@ local function webshell()
     return false
 end
 
-local function post_cmd(body_data)
-    if not optionIsOn(get_config("CmdMatch", config.CmdMatch)) then return false end
-    local rules = load_rules("cmd")
-    if rules then for _, r in ipairs(rules) do if body_data~="" and safe_match(safe_decode(body_data), r, "post_cmd") then
+local post_rule_switches = {
+    post = {"postMatch", config.postMatch},
+    webshell = {"WebshellCheck", config.WebshellCheck},
+    pathtraversal = {"PathTraversalCheck", config.PathTraversalCheck},
+    cmd = {"CmdMatch", config.CmdMatch},
+    ssrf = {"SSRFCheck", config.SSRFCheck},
+    sensitivefile = {"SensitiveFileCheck", config.SensitiveFileCheck}
+}
+
+local function post_rule_enabled(rule_type)
+    local switch = post_rule_switches[rule_type]
+    if not switch then return true end
+    return optionIsOn(get_config(switch[1], switch[2]))
+end
+
+local function post_body_rule(body_data, rule_type)
+    if body_data == "" or not post_rule_enabled(rule_type) then return false end
+    local rules = load_rules(rule_type)
+    if rules then for _, r in ipairs(rules) do if safe_match(safe_decode(body_data), r, "post_"..rule_type) then
         log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
     end end end
     return false
 end
 
-local function post_ssrf(body_data)
-    if not optionIsOn(get_config("SSRFCheck", config.SSRFCheck)) then return false end
-    local rules = load_rules("ssrf")
-    if rules then for _, r in ipairs(rules) do if body_data~="" and safe_match(safe_decode(body_data), r, "post_ssrf") then
-        log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
-    end end end
-    return false
-end
-
-local function post_webshell(body_data)
-    if not optionIsOn(get_config("WebshellCheck", config.WebshellCheck)) then return false end
-    local rules = load_rules("webshell")
-    if rules then for _, r in ipairs(rules) do if body_data~="" and safe_match(safe_decode(body_data), r, "post_webshell") then
-        log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
-    end end end
+local function post_body_rules(body_data)
+    local rule_types = (config.RuleParams and config.RuleParams.post) or {"post"}
+    for _, rule_type in ipairs(rule_types) do
+        if post_body_rule(body_data, rule_type) then return true end
+    end
     return false
 end
 
@@ -610,10 +606,7 @@ end
 local function inspect_post_body(boundary)
     local body_data = read_request_body()
     if not body_data then return false end
-    if body(body_data) then return true end
-    if post_cmd(body_data) then return true end
-    if post_ssrf(body_data) then return true end
-    if post_webshell(body_data) then return true end
+    if post_body_rules(body_data) then return true end
     return check_upload_ext(body_data, boundary)
 end
 

@@ -1,5 +1,5 @@
 \.(svn|htaccess|bash_history)
-\.(bak|inc|old|mdb|sql|backup|java|class)$
+\.(bak|inc|old|mdb|sql|backup|java|class|tgz|gz|tar|zip)$
 (vhost|bbs|host|wwwroot|www|site|root|hytop|flashfxp).*\.rar
 (phpmyadmin|jmx-console|jmxinvokerservlet)
 java\.lang

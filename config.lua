@@ -34,6 +34,9 @@ SensitiveFileCheck="on"
 WebshellCheck="on"
 ResponseFilter="off"
 black_fileExt={"php","jsp"}
+RuleParams={
+    post={"post","webshell","pathtraversal","cmd","ssrf","sensitivefile"}
+}
 ipWhitelist={"127.0.0.1"}
 ipBlocklist={"1.0.0.1","210.12.51.199"}
 CCDeny="on"
@@ -147,6 +150,7 @@ local _M = {
     WebshellCheck = WebshellCheck,
     ResponseFilter = ResponseFilter,
     black_fileExt = black_fileExt,
+    RuleParams = RuleParams,
     ipWhitelist = ipWhitelist,
     ipBlocklist = ipBlocklist,
     CCDeny = CCDeny,
