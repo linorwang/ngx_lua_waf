@@ -60,7 +60,7 @@ RuleParams={
     post={"post","webshell","pathtraversal","cmd","ssrf","sensitivefile"}
 }
 ipWhitelist={"127.0.0.1"}
-ipBlocklist={"1.0.0.1","210.12.51.199"}
+ipBlocklist={"1.0.0.1","1.1.1.1"}
 CCDeny="on"
 CCrate="100/60"
 CCBanTime=3600
