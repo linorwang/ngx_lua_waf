@@ -157,6 +157,14 @@ def main():
 
     config_key = "waf:config"
     r.delete(config_key)
+
+    def redis_config_value(value):
+        if isinstance(value, list):
+            return ",".join(str(item) for item in value)
+        if value is None:
+            return ""
+        return str(value)
+
     config_fields = {
         "attacklog": config.get("attacklog", "on"),
         "logdir": config.get("logdir", "/usr/local/openresty/nginx/logs/hack/"),
@@ -177,9 +185,21 @@ def main():
         "ResponseFilter": config.get("ResponseFilter", "off"),
         "decode_depth": config.get("decode_depth", "2"),
         "static_skip": config.get("static_skip", "light"),
+        "maxRegexLength": config.get("maxRegexLength", "512"),
+        "rejectUnsafeRegex": config.get("rejectUnsafeRegex", "on"),
+        "realIpHeaders": config.get("realIpHeaders", "X-Forwarded-For,X-Real-IP"),
+        "trustedProxyIps": config.get("trustedProxyIps", "127.0.0.1,::1"),
+        "bodyInspectMethods": config.get("bodyInspectMethods", "POST,PUT,PATCH,DELETE"),
+        "CCScope": config.get("CCScope", "ip"),
+        "CCCleanupInterval": config.get("CCCleanupInterval", "1"),
+        "maxRequestBodySize": config.get("maxRequestBodySize", "10485760"),
+        "alertEnabled": config.get("alertEnabled", "on"),
+        "alertThreshold": config.get("alertThreshold", "100"),
+        "alertWindow": config.get("alertWindow", "60"),
+        "reloadToken": config.get("reloadToken", ""),
     }
     for key, value in config_fields.items():
-        r.hset(config_key, key, str(value))
+        r.hset(config_key, key, redis_config_value(value))
     print("[OK] config initialized")
 
     for rule_type in rule_types:

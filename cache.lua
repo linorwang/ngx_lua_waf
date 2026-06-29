@@ -12,6 +12,7 @@ end
 local function get_ttl() return config.cache_ttl or 5 end
 local function is_cache_enabled() return cache_available and config.enable_cache ~= false end
 local function build_key(...) return PREFIX .. table.concat({...}, ":") end
+local CONFIG_PREFIX = "waf-config-v1\n"
 
 function _M.get(key)
     if not is_cache_enabled() then return nil end
@@ -39,11 +40,38 @@ function _M.set_version(t, v) return _M.set("version:"..t, v, get_ttl()) end
 function _M.get_all_config()
     local s = _M.get("config:all")
     if not s then return nil end
-    local c = {}; for k, v in string.gmatch(s, "([^|]+)=([^|]*)|") do c[k]=v end; return c
+    local c = {}
+    if s:sub(1, #CONFIG_PREFIX) == CONFIG_PREFIX then
+        local pos = #CONFIG_PREFIX + 1
+        while pos <= #s do
+            local sep = s:find(":", pos, true)
+            if not sep then return nil end
+            local key_len = tonumber(s:sub(pos, sep - 1))
+            if not key_len then return nil end
+            local key_start = sep + 1
+            local key_end = key_start + key_len - 1
+            local key = s:sub(key_start, key_end)
+            sep = s:find(":", key_end + 1, true)
+            if not sep then return nil end
+            local value_len = tonumber(s:sub(key_end + 1, sep - 1))
+            if not value_len then return nil end
+            local value_start = sep + 1
+            local value_end = value_start + value_len - 1
+            c[key] = s:sub(value_start, value_end)
+            pos = value_end + 1
+        end
+        return c
+    end
+    for k, v in string.gmatch(s, "([^|]+)=([^|]*)|") do c[k]=v end
+    return c
 end
 
 function _M.set_all_config(cfgs)
-    local t = {}; for k, v in pairs(cfgs) do t[#t+1] = k.."="..tostring(v).."|" end
+    local t = {CONFIG_PREFIX}
+    for k, v in pairs(cfgs or {}) do
+        k, v = tostring(k), tostring(v)
+        t[#t+1] = #k..":"..k..#v..":"..v
+    end
     return _M.set("config:all", table.concat(t))
 end
 

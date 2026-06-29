@@ -13,12 +13,13 @@ redis_idle_timeout = 10000  -- 毫秒
 -- ==================== 本地缓存配置 ====================
 cache_ttl = 60  -- 秒，本地缓存过期时间
 ip_cache_check_interval = 1  -- 秒，IP 黑白名单版本检查间隔
-enable_cache = true  -- 是否启用本地缓存
 
 -- ==================== WAF 基础配置（仅用于初始化 Redis，运行时从 Redis 读取） ====================
 enable_cache = true
 decode_depth = 2
 static_skip = "light"
+maxRegexLength = 512
+rejectUnsafeRegex = "on"
 RulePath = "/usr/local/openresty/nginx/conf/waf/wafconf/"
 attacklog = "off"  -- 默认关闭日志，需要时手动开启
 logdir = "/usr/local/openresty/nginx/logs/hack/"  -- 日志存储目录，由维护者管理
@@ -34,6 +35,14 @@ SensitiveFileCheck="on"
 WebshellCheck="on"
 ResponseFilter="off"
 black_fileExt={"php","jsp"}
+realIpHeaders={"X-Forwarded-For","X-Real-IP"}
+trustedProxyIps={"127.0.0.1","::1"}
+bodyInspectMethods={"POST","PUT","PATCH","DELETE"}
+maxRequestBodySize=10485760
+alertEnabled="on"
+alertThreshold=100
+alertWindow=60
+reloadToken=nil
 RuleParams={
     post={"post","webshell","pathtraversal","cmd","ssrf","sensitivefile"}
 }
@@ -42,6 +51,8 @@ ipBlocklist={"1.0.0.1","210.12.51.199"}
 CCDeny="on"
 CCrate="100/60"
 CCBanTime=3600
+CCScope="ip"
+CCCleanupInterval=1
 html=[[
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -135,6 +146,8 @@ local _M = {
     enable_cache = enable_cache,
     decode_depth = decode_depth,
     static_skip = static_skip,
+    maxRegexLength = maxRegexLength,
+    rejectUnsafeRegex = rejectUnsafeRegex,
     RulePath = RulePath,
     attacklog = attacklog,
     logdir = logdir,
@@ -150,12 +163,22 @@ local _M = {
     WebshellCheck = WebshellCheck,
     ResponseFilter = ResponseFilter,
     black_fileExt = black_fileExt,
+    realIpHeaders = realIpHeaders,
+    trustedProxyIps = trustedProxyIps,
+    bodyInspectMethods = bodyInspectMethods,
+    maxRequestBodySize = maxRequestBodySize,
+    alertEnabled = alertEnabled,
+    alertThreshold = alertThreshold,
+    alertWindow = alertWindow,
+    reloadToken = reloadToken,
     RuleParams = RuleParams,
     ipWhitelist = ipWhitelist,
     ipBlocklist = ipBlocklist,
     CCDeny = CCDeny,
     CCrate = CCrate,
     CCBanTime = CCBanTime,
+    CCScope = CCScope,
+    CCCleanupInterval = CCCleanupInterval,
     html = html
 }
 

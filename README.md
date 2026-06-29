@@ -53,8 +53,8 @@ http {
     # ... 原有配置保持不变 ...
 
     # ---------------- WAF 配置开始 ----------------
-    lua_shared_dict limit 10m;
-    lua_shared_dict waf_cache 10m;
+    lua_shared_dict limit 100m;
+    lua_shared_dict waf_cache 50m;
     lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua;;";
 
     init_by_lua_block {
@@ -77,6 +77,38 @@ http {
             root html;
             index index.html index.htm;
         }
+    }
+}
+```
+
+> `limit` 用于 CC 防护计数，`waf_cache` 用于本地配置与规则缓存，二者都需要配置在 `http` 块内。`logdir` 指向的目录需要允许 OpenResty worker 写入；WAF 会尝试自动创建目录，失败时会写入 Nginx error log。
+
+### 安全增强配置
+
+```lua
+-- 最大请求体大小，单位字节；0 表示不限制
+maxRequestBodySize = 10485760
+
+-- 攻击日志告警：alertWindow 秒内达到 alertThreshold 次会写入 Nginx error log
+alertEnabled = "on"
+alertThreshold = 100
+alertWindow = 60
+
+-- 可选：给热加载接口设置 token
+reloadToken = "change-me"
+```
+
+如需暴露热加载接口，建议只允许内网访问，并校验 `reloadToken`：
+
+```nginx
+location = /waf/reload {
+    allow 127.0.0.1;
+    deny all;
+    content_by_lua_block {
+        local waf = require "waf"
+        local ok, err = waf.reload(ngx.var.arg_token)
+        ngx.status = ok and 200 or 403
+        ngx.say(ok and "ok" or err)
     }
 }
 ```
