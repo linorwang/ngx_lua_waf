@@ -53,7 +53,7 @@ http {
     # ... 原有配置保持不变 ...
 
     # ---------------- WAF 配置开始 ----------------
-    lua_shared_dict limit 100m;
+    lua_shared_dict limit 256m;
     lua_shared_dict waf_cache 50m;
     lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua;;";
 
