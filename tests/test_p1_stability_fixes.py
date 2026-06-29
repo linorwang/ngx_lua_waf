@@ -47,6 +47,8 @@ class P1StabilityFixesTest(unittest.TestCase):
         self.assertIn('return "cc:ban:"..ip', self.waf)
         self.assertIn("last_sync_by_ip = {}", self.waf)
         self.assertIn("cc_ban_cache.last_sync_by_ip[ip] = now", self.waf)
+        self.assertIn("local sync_ttl = cc_ban_cache.sync_interval * 2", self.waf)
+        self.assertIn("now - last_sync > sync_ttl", self.waf)
 
     def test_cc_ban_uses_shared_dict_as_cross_worker_state(self):
         self.assertIn("local function shared_cc_ban_expires_at(ip, ban_time, now, limit)", self.waf)

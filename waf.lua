@@ -102,8 +102,10 @@ local function regex_is_too_complex(rule)
     local max_len = tonumber(runtime_config.maxRegexLength or config.maxRegexLength or 512) or 512
     if max_len > 0 and #rule > max_len then return true end
     if optionIsOn(runtime_config.rejectUnsafeRegex or config.rejectUnsafeRegex) then
-        if rule:find("%([^)]-[*+][^)]-%)%s*[*+{]") then return true end
-        if rule:find("%([^)]-{[^)]-%)%s*[*+{]") then return true end
+        local normalized = rule:gsub("\\.", "")
+        if normalized:find("%([^)]-[*+][^)]-%)%s*[*+{]") then return true end
+        if normalized:find("%([^)]-{[^)]-%)%s*[*+{]") then return true end
+        if normalized:find("%([^)]-|[^)]-%)%s*[*+{]") then return true end
     end
     return false
 end
@@ -234,6 +236,16 @@ local function normalize_rule_param_list(value, default, field_name)
     return list
 end
 
+local function invalid_runtime_path(path)
+    if type(path) ~= "string" or path == "" then return true end
+    if path:find("%z") then return true end
+    local normalized = path:gsub("\\", "/")
+    return normalized == ".."
+        or normalized:find("^%.%./") ~= nil
+        or normalized:find("/%.%./") ~= nil
+        or normalized:find("/%.%.$") ~= nil
+end
+
 local function validate_runtime_config(c)
     local defaults = local_config()
     c = c or {}
@@ -280,6 +292,11 @@ local function validate_runtime_config(c)
     if not alert_window or alert_window < 1 then
         ngx.log(ngx.ERR, "[WAF] invalid alertWindow config, fallback to default: ", tostring(c.alertWindow))
         c.alertWindow = defaults.alertWindow
+    end
+
+    if invalid_runtime_path(c.logdir) then
+        ngx.log(ngx.ERR, "[WAF] invalid logdir config, fallback to default: ", tostring(c.logdir))
+        c.logdir = defaults.logdir
     end
 
     if c.static_skip ~= "light" and c.static_skip ~= "off" then
@@ -489,7 +506,7 @@ local function get_header_value(headers, name)
     return headers[name] or headers[name:lower()]
 end
 
-local function client_ip_from_header(name, value)
+local function client_ip_from_header(name, value, fallback_ip)
     if type(value) == "table" then value = value[1] end
     if type(value) ~= "string" then return nil end
     if name:lower() == "x-forwarded-for" then
@@ -501,7 +518,7 @@ local function client_ip_from_header(name, value)
         for i = #ips, 1, -1 do
             if not is_trusted_proxy(ips[i]) then return ips[i] end
         end
-        return ips[1]
+        return fallback_ip
     end
     value = trim(value)
     if is_ip_token(value) then return value end
@@ -514,7 +531,7 @@ local function getClientIp()
 
     local headers = get_headers()
     for _, name in ipairs(config_list(get_config("realIpHeaders", config.realIpHeaders))) do
-        local ip = client_ip_from_header(name, get_header_value(headers, name))
+        local ip = client_ip_from_header(name, get_header_value(headers, name), remote_ip)
         if ip then return ip end
     end
     return remote_ip
@@ -625,6 +642,10 @@ local function should_inspect_body(method)
 end
 
 local function shared_incr_with_ttl(dict, key, ttl)
+    if not dict then
+        ngx.log(ngx.ERR, "[WAF] shared counter unavailable: key=", key)
+        return nil
+    end
     local count, err = dict:incr(key, 1)
     if count then return count end
 
@@ -885,6 +906,14 @@ local function cleanup_cc_ban_cache(now, current_ip)
             cc_ban_cache.last_sync_by_ip[ip] = nil
         end
     end
+
+    local sync_ttl = cc_ban_cache.sync_interval * 2
+    if sync_ttl < interval then sync_ttl = interval end
+    for ip, last_sync in pairs(cc_ban_cache.last_sync_by_ip) do
+        if not cc_ban_cache.ip_map[ip] and now - last_sync > sync_ttl then
+            cc_ban_cache.last_sync_by_ip[ip] = nil
+        end
+    end
 end
 
 local function cc_ban_key(ip)
@@ -934,7 +963,10 @@ local function is_cc_banned(ip, ban_time, now, limit)
         return false
     end
     for k, v in pairs(cc_ban_cache.ip_map) do
-        if v <= now then cc_ban_cache.ip_map[k] = nil end
+        if v <= now then
+            cc_ban_cache.ip_map[k] = nil
+            cc_ban_cache.last_sync_by_ip[k] = nil
+        end
     end
     local redis_banned = waf_redis and waf_redis.cc_ban_check(ip)
     if redis_banned == true then
@@ -1026,8 +1058,18 @@ local function read_body_file_limited(path, max_size)
     local fd = io.open(path, "rb")
     if not fd then return nil end
 
-    local size = fd:seek("end")
-    fd:seek("set", 0)
+    local ok, size = pcall(function() return fd:seek("end") end)
+    if not ok then
+        fd:close()
+        ngx.log(ngx.ERR, "[WAF] failed to stat request body file: ", size)
+        return nil
+    end
+    ok = pcall(function() return fd:seek("set", 0) end)
+    if not ok then
+        fd:close()
+        ngx.log(ngx.ERR, "[WAF] failed to rewind request body file")
+        return nil
+    end
     if max_size > 0 and size and size > max_size then
         fd:close()
         return nil, "too_large", size
@@ -1035,7 +1077,12 @@ local function read_body_file_limited(path, max_size)
 
     local chunks, total = {}, 0
     while true do
-        local chunk = fd:read(8192)
+        local ok_read, chunk = pcall(function() return fd:read(8192) end)
+        if not ok_read then
+            fd:close()
+            ngx.log(ngx.ERR, "[WAF] failed to read request body file: ", chunk)
+            return nil
+        end
         if not chunk then break end
         total = total + #chunk
         if max_size > 0 and total > max_size then

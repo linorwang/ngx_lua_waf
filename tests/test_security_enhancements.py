@@ -18,9 +18,9 @@ class SecurityEnhancementsTest(unittest.TestCase):
         self.init_redis = INIT_REDIS.read_text(encoding="utf-8")
 
     def test_redis_credentials_use_environment_variables(self):
-        self.assertIn('local function env(name)', self.config)
-        self.assertIn('redis_username = env("WAF_REDIS_USERNAME")', self.config)
-        self.assertIn('redis_password = env("WAF_REDIS_PASSWORD")', self.config)
+        self.assertIn('local function env(name, default)', self.config)
+        self.assertIn('redis_username = env("WAF_REDIS_USERNAME", nil)', self.config)
+        self.assertIn('redis_password = env("WAF_REDIS_PASSWORD", nil)', self.config)
         self.assertNotRegex(self.config, r'redis_username\s*=\s*"[^"]+"')
         self.assertNotRegex(self.config, r'redis_password\s*=\s*"[^"]+"')
         self.assertNotIn("os.getenv", self.waf)
@@ -33,6 +33,9 @@ class SecurityEnhancementsTest(unittest.TestCase):
         self.assertIn('return nil, "too_large", size', self.waf)
         file_body = self.waf[self.waf.index("local function read_body_file_limited"):self.waf.index("local function check_upload_ext")]
         self.assertNotIn('fd:read("*a")', file_body)
+        self.assertIn('pcall(function() return fd:seek("end") end)', file_body)
+        self.assertIn('pcall(function() return fd:read(8192) end)', file_body)
+        self.assertIn("failed to read request body file", file_body)
         self.assertIn("local function reject_large_body(size)", self.waf)
         self.assertIn("HTTP_REQUEST_ENTITY_TOO_LARGE or 413", self.waf)
 
@@ -88,6 +91,7 @@ class SecurityEnhancementsTest(unittest.TestCase):
         denycc_body = self.waf[self.waf.index("local function denycc()"):self.waf.index("local function get_boundary()")]
         definitions = re.findall(r"(?m)^\s*local now = ngx\.time\(\)", denycc_body)
         self.assertEqual(definitions, ["    local now = ngx.time()"])
+        self.assertIn("if not limit then", denycc_body)
 
 
 if __name__ == "__main__":

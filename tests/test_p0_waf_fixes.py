@@ -21,6 +21,11 @@ class P0WafFixesTest(unittest.TestCase):
         self.assertIn('"x-forwarded-for"', self.waf.lower())
         self.assertIn("for i = #ips, 1, -1 do", self.waf)
         self.assertIn("if not is_trusted_proxy(ips[i]) then return ips[i] end", self.waf)
+        self.assertIn("local function client_ip_from_header(name, value, fallback_ip)", self.waf)
+        self.assertIn("return fallback_ip", self.waf)
+        self.assertIn("get_header_value(headers, name), remote_ip", self.waf)
+        self.assertNotIn("return ips[1]", self.waf)
+        self.assertIn("local ip = trim(item)", self.waf)
 
     def test_real_ip_validation_is_strict(self):
         ip_body = self.waf[self.waf.index("local function is_ip_token(ip)"):self.waf.index("local function is_trusted_proxy(remote_ip)")]
@@ -35,6 +40,8 @@ class P0WafFixesTest(unittest.TestCase):
 
     def test_cc_limit_uses_atomic_shared_counter(self):
         denycc_body = self.waf[self.waf.index("local function denycc()"):self.waf.index("local function get_boundary()")]
+        self.assertIn("if not limit then", denycc_body)
+        self.assertIn("lua_shared_dict limit is not configured", denycc_body)
         self.assertIn("shared_incr_with_ttl(limit, token, sec)", denycc_body)
         self.assertIn("if req > cnt then", denycc_body)
         self.assertNotIn("local req = limit:get(token)", denycc_body)

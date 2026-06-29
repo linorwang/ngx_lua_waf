@@ -36,12 +36,15 @@ class P2CompatibilityFixesTest(unittest.TestCase):
         self.assertIn("invalid CCrate config", self.waf)
         self.assertIn("invalid decode_depth config", self.waf)
         self.assertIn("invalid maxRegexLength config", self.waf)
+        self.assertIn("local function invalid_runtime_path(path)", self.waf)
+        self.assertIn("invalid logdir config", self.waf)
         self.assertIn("runtime_config = validate_runtime_config", self.waf)
 
     def test_regex_guard_is_configurable(self):
         self.assertIn("maxRegexLength = 512", self.config)
         self.assertIn('rejectUnsafeRegex = "on"', self.config)
         self.assertIn("local function regex_is_too_complex(rule)", self.waf)
+        self.assertIn('local normalized = rule:gsub("\\\\.", "")', self.waf)
         self.assertIn("local function filter_rules(rule_type, rules)", self.waf)
         self.assertIn("skip unsafe regex", self.waf)
 
