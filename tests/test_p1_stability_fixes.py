@@ -27,8 +27,9 @@ class P1StabilityFixesTest(unittest.TestCase):
 
     def test_log_directory_failures_are_not_silent(self):
         self.assertIn("local function ensure_log_dir(dir)", self.waf)
-        self.assertIn('"mkdir -p "', self.waf)
-        self.assertIn("pcall(os.execute", self.waf)
+        self.assertIn('pcall(require, "lfs")', self.waf)
+        self.assertIn("lua-filesystem is unavailable; pre-create logdir", self.waf)
+        self.assertNotIn("os.execute", self.waf)
         self.assertIn("[WAF] failed to write attack log", self.waf)
 
     def test_shared_dicts_are_validated_and_documented(self):
@@ -41,7 +42,11 @@ class P1StabilityFixesTest(unittest.TestCase):
     def test_cc_cache_has_frequent_expiry_cleanup(self):
         self.assertIn("CCCleanupInterval=1", self.config)
         self.assertIn("local function cleanup_cc_ban_cache(now, current_ip)", self.waf)
+        self.assertIn("local function is_cc_banned(ip, ban_time, now, limit)", self.waf)
         self.assertIn("cleanup_cc_ban_cache(now, ip)", self.waf)
+        self.assertIn('return "cc:ban:"..ip', self.waf)
+        self.assertIn("last_sync_by_ip = {}", self.waf)
+        self.assertIn("cc_ban_cache.last_sync_by_ip[ip] = now", self.waf)
 
 
 if __name__ == "__main__":

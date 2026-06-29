@@ -67,11 +67,13 @@ local static_extensions = {
 local cc_ban_cache = {
     ip_map = {},
     last_sync_time = 0,
+    last_sync_by_ip = {},
     sync_interval = 10,
     last_cleanup_time = 0
 }
 
 local log_dir_attempted, shared_dicts_checked = {}, false
+local lfs_mod, lfs_checked = nil, false
 
 local function optionIsOn(opt) return opt == "on" end
 
@@ -181,6 +183,7 @@ local function local_config()
         CmdMatch=config.CmdMatch, SSRFCheck=config.SSRFCheck,
         PathTraversalCheck=config.PathTraversalCheck, SensitiveFileCheck=config.SensitiveFileCheck,
         WebshellCheck=config.WebshellCheck, ResponseFilter=config.ResponseFilter,
+        securityHeaders=config.securityHeaders, contentSecurityPolicy=config.contentSecurityPolicy,
         decode_depth=config.decode_depth, static_skip=config.static_skip,
         maxRegexLength=config.maxRegexLength, rejectUnsafeRegex=config.rejectUnsafeRegex,
         realIpHeaders=config.realIpHeaders, trustedProxyIps=config.trustedProxyIps,
@@ -409,7 +412,30 @@ end
 
 local function is_ip_token(ip)
     ip = trim(ip)
-    return ip ~= "" and ip:lower() ~= "unknown" and ip:match("^[%x%.:]+$") ~= nil
+    if ip == "" or ip:lower() == "unknown" then return false end
+    if ip:match("^%d+%.%d+%.%d+%.%d+$") then
+        for octet in ip:gmatch("%d+") do
+            local n = tonumber(octet)
+            if not n or n < 0 or n > 255 then return false end
+        end
+        return true
+    end
+    if not ip:find(":", 1, true) then return false end
+    if ip:find("[^%x:]") or ip:find(":::", 1, true) then return false end
+    if (ip:sub(1, 1) == ":" and ip:sub(1, 2) ~= "::")
+        or (ip:sub(-1) == ":" and ip:sub(-2) ~= "::") then
+        return false
+    end
+
+    local _, compressions = ip:gsub("::", "")
+    if compressions > 1 then return false end
+    local has_compression = compressions == 1
+    local groups = 0
+    for part in ip:gmatch("[^:]+") do
+        if #part < 1 or #part > 4 or not part:match("^%x+$") then return false end
+        groups = groups + 1
+    end
+    return has_compression and groups < 8 or groups == 8
 end
 
 local function is_trusted_proxy(remote_ip)
@@ -428,7 +454,15 @@ local function client_ip_from_header(name, value)
     if type(value) == "table" then value = value[1] end
     if type(value) ~= "string" then return nil end
     if name:lower() == "x-forwarded-for" then
-        value = value:match("([^,]+)")
+        local ips = {}
+        for item in value:gmatch("[^,]+") do
+            local ip = trim(item)
+            if is_ip_token(ip) then ips[#ips + 1] = ip end
+        end
+        for i = #ips, 1, -1 do
+            if not is_trusted_proxy(ips[i]) then return ips[i] end
+        end
+        return ips[1]
     end
     value = trim(value)
     if is_ip_token(value) then return value end
@@ -447,22 +481,52 @@ local function getClientIp()
     return remote_ip
 end
 
-local function shell_quote(s)
-    return "'"..tostring(s or ""):gsub("'", "'\\''").."'"
+local function load_lfs()
+    if lfs_checked then return lfs_mod end
+    lfs_checked = true
+    local ok, mod = pcall(require, "lfs")
+    if ok then lfs_mod = mod end
+    return lfs_mod
+end
+
+local function ensure_dir_component(fs, path)
+    local mode = fs.attributes(path, "mode")
+    if mode == "directory" then return true end
+    if mode then
+        ngx.log(ngx.ERR, "[WAF] log path exists but is not a directory: ", path)
+        return false
+    end
+    local ok, err = fs.mkdir(path)
+    if ok or fs.attributes(path, "mode") == "directory" then return true end
+    ngx.log(ngx.ERR, "[WAF] failed to create logdir component: ", path, " err=", err)
+    return false
 end
 
 local function ensure_log_dir(dir)
     if not dir or dir == "" then return false end
     if log_dir_attempted[dir] then return false end
     log_dir_attempted[dir] = true
-    if type(os.execute) ~= "function" then
-        ngx.log(ngx.ERR, "[WAF] os.execute is unavailable; cannot create logdir: ", dir)
+
+    local fs = load_lfs()
+    if not fs then
+        ngx.log(ngx.ERR, "[WAF] lua-filesystem is unavailable; pre-create logdir: ", dir)
         return false
     end
-    local ok, result = pcall(os.execute, "mkdir -p "..shell_quote(dir))
-    if ok and (result == true or result == 0) then return true end
-    ngx.log(ngx.ERR, "[WAF] failed to create logdir: ", dir, " err=", result)
-    return false
+
+    local path = tostring(dir):gsub("\\", "/"):gsub("/+$", "")
+    if path == "" then return false end
+    local current = ""
+    if path:sub(1, 1) == "/" then current = "/" end
+    local drive = path:match("^%a:")
+    if drive then
+        current = drive
+        path = path:sub(#drive + 2)
+    end
+    for part in path:gmatch("[^/]+") do
+        current = (current == "" or current == "/") and (current..part) or (current.."/"..part)
+        if not ensure_dir_component(fs, current) then return false end
+    end
+    return true
 end
 
 local function write(file, msg)
@@ -495,12 +559,43 @@ local function validate_shared_dicts()
     end
 end
 
+local function set_header_if_empty(name, value)
+    if value and value ~= "" and ngx.header and ngx.header[name] == nil then
+        ngx.header[name] = value
+    end
+end
+
+local function apply_security_headers()
+    if not optionIsOn(get_config("securityHeaders", config.securityHeaders or "off")) then return end
+    set_header_if_empty("X-Content-Type-Options", "nosniff")
+    set_header_if_empty("X-Frame-Options", "SAMEORIGIN")
+    set_header_if_empty("Referrer-Policy", "strict-origin-when-cross-origin")
+    set_header_if_empty("X-XSS-Protection", "1; mode=block")
+    local csp = get_config("contentSecurityPolicy", config.contentSecurityPolicy)
+    if csp and csp ~= "" then
+        set_header_if_empty("Content-Security-Policy", csp)
+    end
+end
+
 local function should_inspect_body(method)
     method = tostring(method or ""):upper()
     for _, item in ipairs(config_list(get_config("bodyInspectMethods", config.bodyInspectMethods or {"POST"}))) do
         if method == tostring(item):upper() then return true end
     end
     return false
+end
+
+local function shared_incr_with_ttl(dict, key, ttl)
+    local count, err = dict:incr(key, 1)
+    if count then return count end
+
+    local ok, add_err = dict:add(key, 1, ttl)
+    if ok then return 1 end
+
+    count, err = dict:incr(key, 1)
+    if count then return count end
+    ngx.log(ngx.ERR, "[WAF] shared counter failed: key=", key, " err=", err or add_err or "-")
+    return nil
 end
 
 local function alert_event(tag)
@@ -511,16 +606,9 @@ local function alert_event(tag)
     local threshold = tonumber(get_config("alertThreshold", config.alertThreshold or 100)) or 100
     if window < 1 or threshold < 1 then return end
     local key = "waf:alert:"..ngx.today()..":"..(tag or "attack")
-    local count, err = limit:incr(key, 1)
-    if not count then
-        local ok
-        ok, err = limit:add(key, 1, window)
-        count = ok and 1 or nil
-    end
+    local count = shared_incr_with_ttl(limit, key, window)
     if count and count == threshold then
         ngx.log(ngx.ERR, "[WAF] alert threshold reached: tag=", tag or "-", " count=", count, " window=", window)
-    elseif err then
-        ngx.log(ngx.ERR, "[WAF] alert counter failed: ", err)
     end
 end
 
@@ -742,6 +830,7 @@ end
 local function cleanup_cc_ban_cache(now, current_ip)
     if current_ip and cc_ban_cache.ip_map[current_ip] and cc_ban_cache.ip_map[current_ip] <= now then
         cc_ban_cache.ip_map[current_ip] = nil
+        cc_ban_cache.last_sync_by_ip[current_ip] = nil
     end
 
     local interval = tonumber(get_config("CCCleanupInterval", config.CCCleanupInterval or 1)) or 1
@@ -752,8 +841,45 @@ local function cleanup_cc_ban_cache(now, current_ip)
     for ip, expires_at in pairs(cc_ban_cache.ip_map) do
         if expires_at <= now then
             cc_ban_cache.ip_map[ip] = nil
+            cc_ban_cache.last_sync_by_ip[ip] = nil
         end
     end
+end
+
+local function cc_ban_key(ip)
+    return "cc:ban:"..ip
+end
+
+local function set_cc_ban(ip, ban_time, now, limit, sync_redis)
+    cc_ban_cache.ip_map[ip] = now + ban_time
+    if limit then limit:set(cc_ban_key(ip), 1, ban_time) end
+    if sync_redis and waf_redis then waf_redis.cc_ban_set(ip, ban_time) end
+end
+
+local function is_cc_banned(ip, ban_time, now, limit)
+    cleanup_cc_ban_cache(now, ip)
+    if cc_ban_cache.ip_map[ip] and cc_ban_cache.ip_map[ip] > now then
+        return true
+    end
+    if limit and limit:get(cc_ban_key(ip)) then
+        cc_ban_cache.ip_map[ip] = now + ban_time
+        return true
+    end
+
+    local last_sync = cc_ban_cache.last_sync_by_ip[ip] or 0
+    if now - last_sync <= cc_ban_cache.sync_interval then
+        return false
+    end
+    cc_ban_cache.last_sync_time = now
+    cc_ban_cache.last_sync_by_ip[ip] = now
+    for k, v in pairs(cc_ban_cache.ip_map) do
+        if v <= now then cc_ban_cache.ip_map[k] = nil end
+    end
+    if waf_redis and waf_redis.cc_ban_check(ip) then
+        set_cc_ban(ip, ban_time, now, limit, false)
+        return true
+    end
+    return false
 end
 
 local function denycc()
@@ -773,48 +899,21 @@ local function denycc()
     
     -- 先检查本地封禁缓存
     local now = ngx.time()
-    cleanup_cc_ban_cache(now, ip)
-    if cc_ban_cache.ip_map[ip] and cc_ban_cache.ip_map[ip] > now then
+    local limit, token = ngx.shared and ngx.shared.limit, cc_limit_token(ip, uri)
+    if is_cc_banned(ip, ban_time, now, limit) then
         return cc_block()
     end
-    
-    -- 定期同步封禁状态到Redis
-    if now - cc_ban_cache.last_sync_time > cc_ban_cache.sync_interval then
-        cc_ban_cache.last_sync_time = now
-        -- 清理过期本地缓存
-        for k, v in pairs(cc_ban_cache.ip_map) do
-            if v <= now then
-                cc_ban_cache.ip_map[k] = nil
-            end
-        end
-        -- 检查Redis是否有新的封禁
-        if waf_redis then
-            local banned = waf_redis.cc_ban_check(ip)
-            if banned then
-                cc_ban_cache.ip_map[ip] = now + ban_time
-                return cc_block()
-            end
-        end
-    end
-    
-    -- 优先使用本地共享内存计数
-    local limit, token = ngx.shared.limit, cc_limit_token(ip, uri)
+
+    -- 使用共享内存原子递增，避免 get 后 incr 的竞态
     if not limit then
         ngx.log(ngx.ERR, "[WAF] lua_shared_dict limit is not configured")
         return false
     end
-    local req = limit:get(token)
-    if req then 
-        if req >= cnt then 
-            -- 超过阈值，设置本地和Redis封禁
-            cc_ban_cache.ip_map[ip] = now + ban_time
-            if waf_redis then waf_redis.cc_ban_set(ip, ban_time) end
-            return cc_block()
-        else 
-            limit:incr(token,1) 
-        end
-    else 
-        limit:set(token,1,sec) 
+    local req = shared_incr_with_ttl(limit, token, sec)
+    if not req then return false end
+    if req > cnt then
+        set_cc_ban(ip, ban_time, now, limit, true)
+        return cc_block()
     end
     return false
 end
@@ -870,15 +969,24 @@ end
 
 local function check_upload_ext(body_data, boundary)
     if not body_data or body_data == "" then return false end
-    if boundary then
-        for filename in body_data:gmatch('filename="([^"]*)"') do
-            local ext = filename:match("%.([^%.\\/\"]+)$")
-            if ext and fileExtCheck(ext) then return true end
+    if not boundary then return false end
+    local seen = {}
+    local patterns = {
+        'filename%s*=%s*"([^"]*)"',
+        "filename%s*=%s*'([^']*)'",
+        "filename%*%s*=%s*[^']*''([^;%s]+)"
+    }
+    for _, pattern in ipairs(patterns) do
+        for filename in body_data:gmatch(pattern) do
+            filename = safe_decode(filename)
+            if filename ~= "" and not seen[filename] then
+                seen[filename] = true
+                local ext = filename:match("%.([^%.\\/%\"]+)$")
+                if ext and fileExtCheck(ext) then return true end
+            end
         end
-        return false
     end
-    local ext = body_data:match('name=".-"%s*%s*%s*(.-)$')
-    return ext and fileExtCheck(ext) or false
+    return false
 end
 
 local function inspect_post_body(boundary)
@@ -929,12 +1037,12 @@ end
 local function run_waf()
     local ok, err = pcall(function()
         load_ip_lists_if_changed()
+        load_all()
+        validate_shared_dicts()
+        apply_security_headers()
 
         if whiteip() then return end
         if blockip() then return end
-
-        load_all()
-        validate_shared_dicts()
 
         if whiteurl() then return end
         if denycc() then return end

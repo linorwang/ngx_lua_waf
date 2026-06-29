@@ -183,6 +183,8 @@ def main():
         "SensitiveFileCheck": config.get("SensitiveFileCheck", "on"),
         "WebshellCheck": config.get("WebshellCheck", "on"),
         "ResponseFilter": config.get("ResponseFilter", "off"),
+        "securityHeaders": config.get("securityHeaders", "on"),
+        "contentSecurityPolicy": config.get("contentSecurityPolicy", ""),
         "decode_depth": config.get("decode_depth", "2"),
         "static_skip": config.get("static_skip", "light"),
         "maxRegexLength": config.get("maxRegexLength", "512"),

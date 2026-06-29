@@ -54,7 +54,7 @@ class P2CompatibilityFixesTest(unittest.TestCase):
         definitions = re.findall(r"(?m)^\s*local now = ngx\.time\(\)", denycc_body)
         self.assertEqual(definitions, ["    local now = ngx.time()"])
         self.assertLess(denycc_body.index("    local now = ngx.time()"),
-                        denycc_body.index("cleanup_cc_ban_cache(now, ip)"))
+                        denycc_body.index("is_cc_banned(ip, ban_time, now, limit)"))
 
 
 if __name__ == "__main__":

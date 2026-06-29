@@ -30,6 +30,21 @@ class SecurityEnhancementsTest(unittest.TestCase):
         self.assertIn("local function reject_large_body(size)", self.waf)
         self.assertIn("HTTP_REQUEST_ENTITY_TOO_LARGE or 413", self.waf)
 
+    def test_upload_extension_check_is_multipart_only(self):
+        upload_body = self.waf[self.waf.index("local function check_upload_ext(body_data, boundary)"):self.waf.index("local function inspect_post_body(boundary)")]
+        self.assertIn("if not boundary then return false end", upload_body)
+        self.assertIn('filename%s*=%s*"([^"]*)"', upload_body)
+        self.assertIn("filename%*%s*=%s*[^']*''([^;%s]+)", upload_body)
+        self.assertNotIn('name=".-"%s*%s*%s*(.-)$', upload_body)
+
+    def test_security_headers_are_configurable(self):
+        self.assertIn('securityHeaders="on"', self.config)
+        self.assertIn('contentSecurityPolicy=""', self.config)
+        self.assertIn("local function apply_security_headers()", self.waf)
+        self.assertIn('"X-Content-Type-Options", "nosniff"', self.waf)
+        self.assertIn('"X-Frame-Options", "SAMEORIGIN"', self.waf)
+        self.assertIn('"Content-Security-Policy"', self.waf)
+
     def test_alerting_uses_shared_counter(self):
         self.assertIn('alertEnabled="on"', self.config)
         self.assertIn("alertThreshold=100", self.config)
@@ -54,6 +69,8 @@ class SecurityEnhancementsTest(unittest.TestCase):
             "alertThreshold",
             "alertWindow",
             "reloadToken",
+            "securityHeaders",
+            "contentSecurityPolicy",
         ]:
             with self.subTest(key=key):
                 self.assertRegex(self.init_redis, rf'"{re.escape(key)}"\s*:')
