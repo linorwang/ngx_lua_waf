@@ -190,7 +190,7 @@ local function local_config()
         bodyInspectMethods=config.bodyInspectMethods,
         maxRequestBodySize=config.maxRequestBodySize, alertEnabled=config.alertEnabled,
         alertThreshold=config.alertThreshold, alertWindow=config.alertWindow,
-        reloadToken=config.reloadToken
+        reloadToken=config.reloadToken, RuleParams=config.RuleParams
     }
 end
 
@@ -202,6 +202,36 @@ local function filter_rules(rule_type, rules)
         end
     end
     return filtered
+end
+
+local valid_rule_params = {
+    post = true, webshell = true, pathtraversal = true,
+    cmd = true, ssrf = true, sensitivefile = true
+}
+
+local function normalize_rule_param_list(value, default, field_name)
+    local list = {}
+    local function add(item)
+        item = type(item) == "string" and item or tostring(item or "")
+        if item ~= "" and valid_rule_params[item] then
+            list[#list + 1] = item
+        elseif item ~= "" then
+            ngx.log(ngx.ERR, "[WAF] invalid ", field_name, " item ignored: ", item)
+        end
+    end
+
+    if type(value) == "table" then
+        for _, item in ipairs(value) do add(item) end
+    elseif type(value) == "string" then
+        for item in value:gmatch("[^,%s]+") do add(item) end
+    elseif value ~= nil then
+        ngx.log(ngx.ERR, "[WAF] invalid ", field_name, " config, fallback to default: ", tostring(value))
+    end
+
+    if #list == 0 then
+        for _, item in ipairs(default or {"post"}) do add(item) end
+    end
+    return list
 end
 
 local function validate_runtime_config(c)
@@ -256,6 +286,15 @@ local function validate_runtime_config(c)
         ngx.log(ngx.ERR, "[WAF] invalid static_skip config, fallback to default: ", tostring(c.static_skip))
         c.static_skip = defaults.static_skip
     end
+
+    local default_rule_params = type(defaults.RuleParams) == "table" and defaults.RuleParams or {post = {"post"}}
+    local rule_params = type(c.RuleParams) == "table" and c.RuleParams or {}
+    if c.RuleParams ~= nil and type(c.RuleParams) ~= "table" then
+        ngx.log(ngx.ERR, "[WAF] invalid RuleParams config, fallback to default: ", tostring(c.RuleParams))
+    end
+    c.RuleParams = {
+        post = normalize_rule_param_list(rule_params.post, default_rule_params.post, "RuleParams.post")
+    }
 
     return c
 end
@@ -796,7 +835,9 @@ local function post_body_rule(body_data, rule_type)
 end
 
 local function post_body_rules(body_data)
-    local rule_types = (config.RuleParams and config.RuleParams.post) or {"post"}
+    local rule_params = get_config("RuleParams", config.RuleParams)
+    local rule_types = (type(rule_params) == "table" and type(rule_params.post) == "table" and rule_params.post)
+        or (config.RuleParams and config.RuleParams.post) or {"post"}
     for _, rule_type in ipairs(rule_types) do
         if post_body_rule(body_data, rule_type) then return true end
     end
@@ -850,19 +891,41 @@ local function cc_ban_key(ip)
     return "cc:ban:"..ip
 end
 
+local function shared_cc_ban_expires_at(ip, ban_time, now, limit)
+    if not limit then return nil end
+    local expires_at = limit:get(cc_ban_key(ip))
+    if not expires_at then return nil end
+    expires_at = tonumber(expires_at)
+    if not expires_at or expires_at <= now then
+        expires_at = now + ban_time
+    end
+    return expires_at
+end
+
 local function set_cc_ban(ip, ban_time, now, limit, sync_redis)
-    cc_ban_cache.ip_map[ip] = now + ban_time
-    if limit then limit:set(cc_ban_key(ip), 1, ban_time) end
+    local expires_at = now + ban_time
+    if limit then
+        local ok, err = limit:set(cc_ban_key(ip), expires_at, ban_time)
+        if not ok then ngx.log(ngx.ERR, "[WAF] failed to set shared CC ban: ", err or "-") end
+    end
+    cc_ban_cache.ip_map[ip] = expires_at
     if sync_redis and waf_redis then waf_redis.cc_ban_set(ip, ban_time) end
 end
 
 local function is_cc_banned(ip, ban_time, now, limit)
     cleanup_cc_ban_cache(now, ip)
-    if cc_ban_cache.ip_map[ip] and cc_ban_cache.ip_map[ip] > now then
+    local shared_expires_at = shared_cc_ban_expires_at(ip, ban_time, now, limit)
+    if shared_expires_at then
+        cc_ban_cache.ip_map[ip] = shared_expires_at
         return true
     end
-    if limit and limit:get(cc_ban_key(ip)) then
-        cc_ban_cache.ip_map[ip] = now + ban_time
+
+    local local_expires_at = cc_ban_cache.ip_map[ip]
+    if local_expires_at and local_expires_at > now then
+        if limit then
+            local ok, err = limit:set(cc_ban_key(ip), local_expires_at, local_expires_at - now)
+            if not ok then ngx.log(ngx.ERR, "[WAF] failed to refresh shared CC ban: ", err or "-") end
+        end
         return true
     end
 
@@ -870,14 +933,19 @@ local function is_cc_banned(ip, ban_time, now, limit)
     if now - last_sync <= cc_ban_cache.sync_interval then
         return false
     end
-    cc_ban_cache.last_sync_time = now
-    cc_ban_cache.last_sync_by_ip[ip] = now
     for k, v in pairs(cc_ban_cache.ip_map) do
         if v <= now then cc_ban_cache.ip_map[k] = nil end
     end
-    if waf_redis and waf_redis.cc_ban_check(ip) then
+    local redis_banned = waf_redis and waf_redis.cc_ban_check(ip)
+    if redis_banned == true then
+        cc_ban_cache.last_sync_time = now
+        cc_ban_cache.last_sync_by_ip[ip] = now
         set_cc_ban(ip, ban_time, now, limit, false)
         return true
+    end
+    if redis_banned == false then
+        cc_ban_cache.last_sync_time = now
+        cc_ban_cache.last_sync_by_ip[ip] = now
     end
     return false
 end
@@ -954,17 +1022,49 @@ local function body_data_too_large(body_data)
     return max_size > 0 and body_data and #body_data > max_size
 end
 
+local function read_body_file_limited(path, max_size)
+    local fd = io.open(path, "rb")
+    if not fd then return nil end
+
+    local size = fd:seek("end")
+    fd:seek("set", 0)
+    if max_size > 0 and size and size > max_size then
+        fd:close()
+        return nil, "too_large", size
+    end
+
+    local chunks, total = {}, 0
+    while true do
+        local chunk = fd:read(8192)
+        if not chunk then break end
+        total = total + #chunk
+        if max_size > 0 and total > max_size then
+            fd:close()
+            return nil, "too_large", total
+        end
+        chunks[#chunks + 1] = chunk
+    end
+    fd:close()
+
+    return table.concat(chunks)
+end
+
 local function read_request_body()
+    local too_large, size = request_body_too_large()
+    if too_large then return nil, "too_large", size end
+
     ngx.req.read_body()
+    local max_size = tonumber(get_config("maxRequestBodySize", config.maxRequestBodySize or 0)) or 0
     local body_data = ngx.req.get_body_data()
-    if body_data then return body_data end
+    if body_data then
+        if max_size > 0 and #body_data > max_size then
+            return nil, "too_large", #body_data
+        end
+        return body_data
+    end
     local f = ngx.req.get_body_file()
     if not f then return nil end
-    local fd = io.open(f, "r")
-    if not fd then return nil end
-    local d = fd:read("*a")
-    fd:close()
-    return d
+    return read_body_file_limited(f, max_size)
 end
 
 local function check_upload_ext(body_data, boundary)
@@ -992,7 +1092,8 @@ end
 local function inspect_post_body(boundary)
     local too_large, size = request_body_too_large()
     if too_large then return reject_large_body(size) end
-    local body_data = read_request_body()
+    local body_data, err, body_size = read_request_body()
+    if err == "too_large" then return reject_large_body(body_size) end
     if not body_data then return false end
     if body_data_too_large(body_data) then return reject_large_body(#body_data) end
     if post_body_rules(body_data) then return true end

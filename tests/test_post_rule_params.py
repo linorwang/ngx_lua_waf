@@ -35,6 +35,12 @@ class PostRuleParamsTest(unittest.TestCase):
         self.assertIn("for _, rule_type in ipairs(rule_types) do", self.waf)
         self.assertIn("load_rules(rule_type)", self.waf)
 
+    def test_rule_params_post_is_runtime_validated(self):
+        self.assertIn("RuleParams=config.RuleParams", self.waf)
+        self.assertIn("local function normalize_rule_param_list(value, default, field_name)", self.waf)
+        self.assertIn("invalid RuleParams config", self.waf)
+        self.assertIn("RuleParams.post", self.waf)
+
     def test_waf_has_post_switches_for_configured_rule_types(self):
         for rule_type in self.post_rule_types:
             with self.subTest(rule_type=rule_type):

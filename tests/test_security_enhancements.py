@@ -17,16 +17,22 @@ class SecurityEnhancementsTest(unittest.TestCase):
         self.waf = WAF.read_text(encoding="utf-8")
         self.init_redis = INIT_REDIS.read_text(encoding="utf-8")
 
-    def test_redis_credentials_remain_static_config_values(self):
-        self.assertIn('redis_username = "yanfa"', self.config)
-        self.assertIn('redis_password = "BTh44gxWmp6FjhR6"', self.config)
-        self.assertNotIn("os.getenv", self.config)
+    def test_redis_credentials_use_environment_variables(self):
+        self.assertIn('local function env(name)', self.config)
+        self.assertIn('redis_username = env("WAF_REDIS_USERNAME")', self.config)
+        self.assertIn('redis_password = env("WAF_REDIS_PASSWORD")', self.config)
+        self.assertNotRegex(self.config, r'redis_username\s*=\s*"[^"]+"')
+        self.assertNotRegex(self.config, r'redis_password\s*=\s*"[^"]+"')
         self.assertNotIn("os.getenv", self.waf)
 
     def test_request_body_size_limit_is_enforced(self):
         self.assertIn("maxRequestBodySize=10485760", self.config)
         self.assertIn("local function request_body_too_large()", self.waf)
         self.assertIn("local function body_data_too_large(body_data)", self.waf)
+        self.assertIn("local function read_body_file_limited(path, max_size)", self.waf)
+        self.assertIn('return nil, "too_large", size', self.waf)
+        file_body = self.waf[self.waf.index("local function read_body_file_limited"):self.waf.index("local function check_upload_ext")]
+        self.assertNotIn('fd:read("*a")', file_body)
         self.assertIn("local function reject_large_body(size)", self.waf)
         self.assertIn("HTTP_REQUEST_ENTITY_TOO_LARGE or 413", self.waf)
 
@@ -76,6 +82,7 @@ class SecurityEnhancementsTest(unittest.TestCase):
                 self.assertRegex(self.init_redis, rf'"{re.escape(key)}"\s*:')
         self.assertIn("def redis_config_value(value):", self.init_redis)
         self.assertIn('return ",".join(str(item) for item in value)', self.init_redis)
+        self.assertIn("env_match = re.match", self.init_redis)
 
     def test_denycc_now_is_real_code_once(self):
         denycc_body = self.waf[self.waf.index("local function denycc()"):self.waf.index("local function get_boundary()")]

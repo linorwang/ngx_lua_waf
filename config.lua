@@ -1,11 +1,22 @@
+local function env(name, default)
+    -- 优先使用写死的默认值
+    if default ~= nil and default ~= "" then
+        return default
+    end
+    -- 回退到环境变量
+    local value = os.getenv(name)
+    if value == "" then return nil end
+    return value
+end
+
 -- ==================== Redis 连接配置 ====================
 use_redis = true
 
 redis_host = "127.0.0.1"
 redis_port = 6379
 redis_db = 0  -- Redis DB 库选择，默认为 0
-redis_username = "yanfa"  -- Redis 6.0+ ACL 用户名，没有则设为 nil
-redis_password = "BTh44gxWmp6FjhR6"  -- 密码，没有则设为 nil
+redis_username = env("WAF_REDIS_USERNAME", nil)  -- Redis 6.0+ ACL 用户名，写死值优先，没有则设为 nil
+redis_password = env("WAF_REDIS_PASSWORD", nil)  -- 密码，写死值优先，没有则设为 nil
 redis_timeout = 1000  -- 毫秒
 redis_pool_size = 1000
 redis_idle_timeout = 10000  -- 毫秒

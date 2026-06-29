@@ -134,6 +134,12 @@ location = /waf/reload {
 编辑 `/usr/local/openresty/nginx/conf/waf/config.lua`：
 
 ```lua
+local function env(name)
+    local value = os.getenv(name)
+    if value == "" then return nil end
+    return value
+end
+
 -- 启用 Redis 模式
 use_redis = true
 
@@ -142,9 +148,9 @@ redis_host = "127.0.0.1"
 redis_port = 6379
 redis_db = 0
 -- Redis 6.0+ ACL 用户名，没有则设为 nil
-redis_username = nil
+redis_username = env("WAF_REDIS_USERNAME")
 -- Redis 密码，没有则设为 nil
-redis_password = nil
+redis_password = env("WAF_REDIS_PASSWORD")
 redis_timeout = 1000  -- 毫秒
 redis_pool_size = 1000
 redis_idle_timeout = 10000  -- 毫秒
@@ -152,6 +158,13 @@ redis_idle_timeout = 10000  -- 毫秒
 -- 本地缓存配置
 cache_ttl = 60  -- 秒，配置和规则缓存过期时间
 ip_cache_check_interval = 1  -- 秒，IP 黑白名单版本检查间隔
+```
+
+OpenResty worker 读取环境变量时，需要在 Nginx 主配置中显式透传，例如：
+
+```nginx
+env WAF_REDIS_USERNAME;
+env WAF_REDIS_PASSWORD;
 ```
 
 ### 第五步：初始化数据
@@ -439,8 +452,8 @@ ngx_lua_waf/
 | `redis_host` | Redis 主机 | `127.0.0.1` |
 | `redis_port` | Redis 端口 | `6379` |
 | `redis_db` | Redis DB | `0` |
-| `redis_username` | Redis ACL 用户名 | `nil` |
-| `redis_password` | Redis 密码 | `nil` |
+| `redis_username` | Redis ACL 用户名 | `env("WAF_REDIS_USERNAME")` |
+| `redis_password` | Redis 密码 | `env("WAF_REDIS_PASSWORD")` |
 | `cache_ttl` | 配置/规则缓存时间（秒） | `60` |
 | `ip_cache_check_interval` | IP 列表版本检查间隔（秒） | `1` |
 | `decode_depth` | URL 解码深度 | `2` |
