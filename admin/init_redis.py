@@ -25,14 +25,17 @@ def read_config():
     def parse_simple_value(value_str):
         value_str = value_str.strip()
         env_match = re.match(
-            r'(?:env|os\.getenv)\(["\']([^"\']+)["\']\)(?:\s+or\s+(.+))?$',
+            r'(?:env|os\.getenv)\(["\']([^"\']+)["\'](?:\s*,\s*(.*?))?\)(?:\s+or\s+(.+))?$',
             value_str,
         )
         if env_match:
+            default = parse_simple_value(env_match.group(2)) if env_match.group(2) else None
+            if default is not None and default != "":
+                return default
             env_value = os.environ.get(env_match.group(1))
             if env_value:
                 return env_value
-            fallback = env_match.group(2)
+            fallback = env_match.group(3)
             return parse_simple_value(fallback) if fallback else None
         if value_str == "true":
             return True

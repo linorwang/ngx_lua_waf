@@ -1,4 +1,7 @@
+import importlib.util
+import os
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -86,6 +89,43 @@ class SecurityEnhancementsTest(unittest.TestCase):
         self.assertIn("def redis_config_value(value):", self.init_redis)
         self.assertIn('return ",".join(str(item) for item in value)', self.init_redis)
         self.assertIn("env_match = re.match", self.init_redis)
+
+    def test_init_redis_env_default_prefers_local_config(self):
+        spec = importlib.util.spec_from_file_location("init_redis", INIT_REDIS)
+        init_redis = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(init_redis)
+
+        previous_repo_dir = init_redis.repo_dir
+        previous_username = os.environ.get("WAF_REDIS_USERNAME")
+        previous_password = os.environ.get("WAF_REDIS_PASSWORD")
+        os.environ["WAF_REDIS_USERNAME"] = "from_env"
+        os.environ["WAF_REDIS_PASSWORD"] = "from_env_password"
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                init_redis.repo_dir = tmpdir
+                Path(tmpdir, "config.lua").write_text(
+                    '\n'.join([
+                        'redis_username = env("WAF_REDIS_USERNAME", "local_user")',
+                        'redis_password = env("WAF_REDIS_PASSWORD", nil)',
+                    ]),
+                    encoding="utf-8",
+                )
+
+                parsed = init_redis.read_config()
+
+            self.assertEqual(parsed["redis_username"], "local_user")
+            self.assertEqual(parsed["redis_password"], "from_env_password")
+        finally:
+            init_redis.repo_dir = previous_repo_dir
+            if previous_username is None:
+                os.environ.pop("WAF_REDIS_USERNAME", None)
+            else:
+                os.environ["WAF_REDIS_USERNAME"] = previous_username
+            if previous_password is None:
+                os.environ.pop("WAF_REDIS_PASSWORD", None)
+            else:
+                os.environ["WAF_REDIS_PASSWORD"] = previous_password
 
     def test_denycc_now_is_real_code_once(self):
         denycc_body = self.waf[self.waf.index("local function denycc()"):self.waf.index("local function get_boundary()")]
