@@ -212,6 +212,8 @@ def main():
         "alertThreshold": config.get("alertThreshold", "100"),
         "alertWindow": config.get("alertWindow", "60"),
         "reloadToken": config.get("reloadToken", ""),
+        "prometheus": config.get("prometheus", "off"),
+        "prometheusMetricsDict": config.get("prometheusMetricsDict", "prometheus_metrics"),
     }
     for key, value in config_fields.items():
         r.hset(config_key, key, redis_config_value(value))

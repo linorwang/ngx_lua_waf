@@ -2,6 +2,15 @@ local config = require "config"
 
 -- 模块预加载（不执行任何网络操作）
 local waf_redis, waf_cache = nil, nil
+local waf_metrics, metrics_checked, metrics_error_logged, metrics_error_recording = nil, false, false, false
+
+local record_waf_request = function() end
+local record_waf_block = function() end
+local record_rule_match = function() end
+local record_cc_event = function() end
+local record_body_rejection = function() end
+local record_waf_error = function() end
+local record_config_reload = function() end
 
 local function ensure_cache_loaded()
     if config.enable_cache == false then return nil end
@@ -10,6 +19,7 @@ local function ensure_cache_loaded()
         if ok then
             waf_cache = mod
         else
+            record_waf_error("cache")
             ngx.log(ngx.ERR, "[WAF] cache module load failed: ", mod)
         end
     end
@@ -23,6 +33,7 @@ local function ensure_redis_loaded()
         if ok then
             waf_redis = mod
         else
+            record_waf_error("redis")
             ngx.log(ngx.ERR, "[WAF] redis module load failed: ", mod)
         end
     end
@@ -87,6 +98,7 @@ local function safe_decode(data)
         local ok, next_decoded = pcall(unescape, decoded)
         if not ok then
             ngx.log(ngx.ERR, "[WAF] uri decode failed: ", next_decoded)
+            record_waf_error("run")
             return decoded
         end
         if not next_decoded or next_decoded == decoded then
@@ -112,6 +124,7 @@ end
 
 local function rule_allowed(rule, tag)
     if not regex_is_too_complex(rule) then return true end
+    record_waf_error("regex")
     ngx.log(ngx.ERR, "[WAF] skip unsafe regex", tag and (" ["..tag.."]") or "", ": ", rule)
     return false
 end
@@ -122,10 +135,12 @@ local function safe_match(subject, rule, tag)
     if type(subject) ~= "string" then subject = tostring(subject) end
     local ok, res, err = pcall(ngxmatch, subject, rule, "isjo")
     if not ok then
+        record_waf_error("regex")
         ngx.log(ngx.ERR, "[WAF] regex match failed", tag and (" ["..tag.."]") or "", ": ", res, " rule=", rule)
         return false
     end
     if err then
+        record_waf_error("regex")
         ngx.log(ngx.ERR, "[WAF] invalid regex", tag and (" ["..tag.."]") or "", ": ", err, " rule=", rule)
         return false
     end
@@ -192,7 +207,8 @@ local function local_config()
         bodyInspectMethods=config.bodyInspectMethods,
         maxRequestBodySize=config.maxRequestBodySize, alertEnabled=config.alertEnabled,
         alertThreshold=config.alertThreshold, alertWindow=config.alertWindow,
-        reloadToken=config.reloadToken, RuleParams=config.RuleParams
+        reloadToken=config.reloadToken, prometheus=config.prometheus,
+        prometheusMetricsDict=config.prometheusMetricsDict, RuleParams=config.RuleParams
     }
 end
 
@@ -448,6 +464,81 @@ end
 
 local function get_config(k, d) return runtime_config[k] or d end
 
+local function metrics_enabled()
+    return optionIsOn(get_config("prometheus", config.prometheus or "off"))
+end
+
+local function log_metrics_error(err)
+    if not metrics_error_recording and waf_metrics and waf_metrics.error then
+        metrics_error_recording = true
+        pcall(function() waf_metrics.error("metrics") end)
+        metrics_error_recording = false
+    end
+    if metrics_error_logged then return end
+    metrics_error_logged = true
+    ngx.log(ngx.ERR, "[WAF] metrics module unavailable: ", err or "-")
+end
+
+local function ensure_metrics_loaded()
+    if not metrics_enabled() then return nil end
+    if waf_metrics then return waf_metrics end
+    if metrics_checked then return nil end
+    metrics_checked = true
+    local ok, mod = pcall(require, "metrics")
+    if not ok then
+        log_metrics_error(mod)
+        return nil
+    end
+    waf_metrics = mod
+    return waf_metrics
+end
+
+local function waf_request_duration()
+    if not ngx.ctx or not ngx.ctx.waf_start_time or not ngx.now then return nil end
+    local duration = ngx.now() - ngx.ctx.waf_start_time
+    return duration >= 0 and duration or nil
+end
+
+local function call_metrics(method, ...)
+    local metrics = ensure_metrics_loaded()
+    if not metrics or not metrics[method] then return end
+    local args = {...}
+    local ok, err = pcall(function() metrics[method](unpack(args)) end)
+    if not ok then log_metrics_error(err) end
+end
+
+record_waf_request = function(outcome)
+    if ngx.ctx then
+        if ngx.ctx.waf_recorded_outcome then return end
+        ngx.ctx.waf_recorded_outcome = outcome
+    end
+    call_metrics("request", outcome, waf_request_duration())
+end
+
+record_waf_block = function(reason)
+    call_metrics("block", reason)
+end
+
+record_rule_match = function(rule_type)
+    call_metrics("rule_match", rule_type)
+end
+
+record_cc_event = function(event)
+    call_metrics("cc_event", event)
+end
+
+record_body_rejection = function(reason)
+    call_metrics("body_rejection", reason)
+end
+
+record_waf_error = function(stage)
+    call_metrics("error", stage)
+end
+
+record_config_reload = function(result)
+    call_metrics("reload", result)
+end
+
 local function config_list(value)
     local list = {}
     if type(value) == "table" then
@@ -596,6 +687,7 @@ local function write(file, msg)
     if fd then
         fd:write(msg); fd:flush(); fd:close()
     else
+        record_waf_error("log_write")
         ngx.log(ngx.ERR, "[WAF] failed to write attack log: ", file)
     end
 end
@@ -672,7 +764,17 @@ local function alert_event(tag)
     end
 end
 
-local function log(method, url, data, tag)
+local function log(method, url, data, tag, rule_type)
+    rule_type = rule_type or "other"
+    record_waf_block(rule_type)
+    if rule_type == "url" or rule_type == "args" or rule_type == "post"
+        or rule_type == "cookie" or rule_type == "ua" or rule_type == "cmd"
+        or rule_type == "ssrf" or rule_type == "pathtraversal"
+        or rule_type == "sensitivefile" or rule_type == "webshell"
+        or rule_type == "file_ext" then
+        record_rule_match(rule_type)
+    end
+    record_waf_request("block")
     if not optionIsOn(get_config("attacklog", config.attacklog)) then return end
     local ip, ua, sn, t, dir = getClientIp(), ngx.var.http_user_agent, ngx.var.server_name, ngx.localtime(), get_config("logdir", config.logdir)
     local line = ua and (ip.." ["..t.."] \""..method.." "..sn..url.."\" \""..(data or "-").."\"  \""..ua.."\" \""..tag.."\"\n")
@@ -690,7 +792,7 @@ end
 local function whiteurl()
     if not optionIsOn(get_config("whiteModule", config.whiteModule)) then return false end
     local rules = load_rules("whiteurl")
-    if rules then for _, r in ipairs(rules) do if safe_match(ngx.var.uri, r, "whiteurl") then return true end end end
+    if rules then for _, r in ipairs(rules) do if safe_match(ngx.var.uri, r, "whiteurl") then record_waf_request("skip"); return true end end end
     return false
 end
 
@@ -699,7 +801,7 @@ local function fileExtCheck(ext)
     ext = ext:lower()
     for _, v in ipairs(config.black_fileExt) do
         if ext == tostring(v):lower() then
-            log('POST', ngx.var.request_uri, "-", "file attack with ext "..ext); say_html(); return true
+            log('POST', ngx.var.request_uri, "-", "file attack with ext "..ext, "file_ext"); say_html(); return true
         end
     end
     return false
@@ -716,7 +818,7 @@ local function args()
                 local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
             else data=v end
             if data and type(data)~="boolean" and safe_match(safe_decode(data), r, "args") then
-                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+                log('GET', ngx.var.request_uri, data, r, "args"); say_html(); return true
             end
         end
     end
@@ -727,7 +829,7 @@ local function url()
     if not optionIsOn(get_config("UrlDeny", config.UrlDeny)) then return false end
     local rules = load_rules("url")
     if rules then for _, r in ipairs(rules) do if safe_match(safe_decode(ngx.var.request_uri), r, "url") then
-        log('GET', ngx.var.request_uri, "-", r); say_html(); return true
+        log('GET', ngx.var.request_uri, "-", r, "url"); say_html(); return true
     end end end
     return false
 end
@@ -737,7 +839,7 @@ local function ua()
     if not ua_str then return false end
     local rules = load_rules("user-agent")
     if rules then for _, r in ipairs(rules) do if safe_match(ua_str, r, "user-agent") then
-        log('UA', ngx.var.request_uri, "-", r); say_html(); return true
+        log('UA', ngx.var.request_uri, "-", r, "ua"); say_html(); return true
     end end end
     return false
 end
@@ -748,7 +850,7 @@ local function cookie()
     if not ck then return false end
     local rules = load_rules("cookie")
     if rules then for _, r in ipairs(rules) do if safe_match(safe_decode(ck), r, "cookie") then
-        log('Cookie', ngx.var.request_uri, "-", r); say_html(); return true
+        log('Cookie', ngx.var.request_uri, "-", r, "cookie"); say_html(); return true
     end end end
     return false
 end
@@ -766,7 +868,7 @@ local function cmd()
                 local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
             else data=v end
             if data and type(data)~="boolean" and safe_match(safe_decode(data), r, "cmd") then
-                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+                log('GET', ngx.var.request_uri, data, r, "cmd"); say_html(); return true
             end
         end
     end
@@ -777,7 +879,7 @@ local function pathtraversal()
     if not optionIsOn(get_config("PathTraversalCheck", config.PathTraversalCheck)) then return false end
     local rules = load_rules("pathtraversal")
     if rules then for _, r in ipairs(rules) do if safe_match(safe_decode(ngx.var.request_uri), r, "pathtraversal") then
-        log('GET', ngx.var.request_uri, "-", r); say_html(); return true
+        log('GET', ngx.var.request_uri, "-", r, "pathtraversal"); say_html(); return true
     end end end
     return false
 end
@@ -786,7 +888,7 @@ local function sensitivefile()
     if not optionIsOn(get_config("SensitiveFileCheck", config.SensitiveFileCheck)) then return false end
     local rules = load_rules("sensitivefile")
     if rules then for _, r in ipairs(rules) do if safe_match(safe_decode(ngx.var.request_uri), r, "sensitivefile") then
-        log('GET', ngx.var.request_uri, "-", r); say_html(); return true
+        log('GET', ngx.var.request_uri, "-", r, "sensitivefile"); say_html(); return true
     end end end
     return false
 end
@@ -804,7 +906,7 @@ local function ssrf()
                 local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
             else data=v end
             if data and type(data)~="boolean" and safe_match(safe_decode(data), r, "ssrf") then
-                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+                log('GET', ngx.var.request_uri, data, r, "ssrf"); say_html(); return true
             end
         end
     end
@@ -824,7 +926,7 @@ local function webshell()
                 local t={}; for _, x in ipairs(v) do t[#t+1] = x==true and "" or x end; data=table.concat(t, " ")
             else data=v end
             if data and type(data)~="boolean" and safe_match(safe_decode(data), r, "webshell") then
-                log('GET', ngx.var.request_uri, data, r); say_html(); return true
+                log('GET', ngx.var.request_uri, data, r, "webshell"); say_html(); return true
             end
         end
     end
@@ -850,7 +952,7 @@ local function post_body_rule(body_data, rule_type)
     if body_data == "" or not post_rule_enabled(rule_type) then return false end
     local rules = load_rules(rule_type)
     if rules then for _, r in ipairs(rules) do if safe_match(safe_decode(body_data), r, "post_"..rule_type) then
-        log('POST', ngx.var.request_uri, body_data, r); say_html(); return true
+        log('POST', ngx.var.request_uri, body_data, r, rule_type); say_html(); return true
     end end end
     return false
 end
@@ -876,6 +978,8 @@ local function parse_cc_rate(rate)
 end
 
 local function cc_block()
+    record_waf_block("cc")
+    record_waf_request("block")
     ngx.header.content_type="text/html"
     ngx.status=ngx.HTTP_FORBIDDEN
     ngx.say(get_config("html", config.html))
@@ -1001,6 +1105,7 @@ local function denycc()
     local now = ngx.time()
     local limit, token = ngx.shared and ngx.shared.limit, cc_limit_token(ip, uri)
     if is_cc_banned(ip, ban_time, now, limit) then
+        record_cc_event("ban_hit")
         return cc_block()
     end
 
@@ -1012,7 +1117,9 @@ local function denycc()
     local req = shared_incr_with_ttl(limit, token, sec)
     if not req then return false end
     if req > cnt then
+        record_cc_event("limit_exceeded")
         set_cc_ban(ip, ban_time, now, limit, true)
+        record_cc_event("ban_set")
         return cc_block()
     end
     return false
@@ -1034,7 +1141,8 @@ local function get_boundary()
 end
 
 local function reject_large_body(size)
-    log('BODY', ngx.var.request_uri, tostring(size or "-"), "request body too large")
+    log('BODY', ngx.var.request_uri, tostring(size or "-"), "request body too large", "body_too_large")
+    record_body_rejection("too_large")
     ngx.header.content_type="text/html"
     ngx.status=ngx.HTTP_REQUEST_ENTITY_TOO_LARGE or 413
     ngx.say(get_config("html", config.html))
@@ -1056,17 +1164,22 @@ end
 
 local function read_body_file_limited(path, max_size)
     local fd = io.open(path, "rb")
-    if not fd then return nil end
+    if not fd then
+        record_body_rejection("read_failed")
+        return nil
+    end
 
     local ok, size = pcall(function() return fd:seek("end") end)
     if not ok then
         fd:close()
+        record_body_rejection("read_failed")
         ngx.log(ngx.ERR, "[WAF] failed to stat request body file: ", size)
         return nil
     end
     ok = pcall(function() return fd:seek("set", 0) end)
     if not ok then
         fd:close()
+        record_body_rejection("read_failed")
         ngx.log(ngx.ERR, "[WAF] failed to rewind request body file")
         return nil
     end
@@ -1080,6 +1193,7 @@ local function read_body_file_limited(path, max_size)
         local ok_read, chunk = pcall(function() return fd:read(8192) end)
         if not ok_read then
             fd:close()
+            record_body_rejection("read_failed")
             ngx.log(ngx.ERR, "[WAF] failed to read request body file: ", chunk)
             return nil
         end
@@ -1148,7 +1262,15 @@ local function inspect_post_body(boundary)
 end
 
 local function whiteip() return ip_whitelist_map[getClientIp()] == true end
-local function blockip() if ip_blocklist_map[getClientIp()] then ngx.exit(403); return true end; return false end
+local function blockip()
+    if ip_blocklist_map[getClientIp()] then
+        record_waf_block("ip_blocklist")
+        record_waf_request("block")
+        ngx.exit(403)
+        return true
+    end
+    return false
+end
 
 local function load_all()
     -- 只有需要时才重新加载配置
@@ -1164,6 +1286,7 @@ local function reload_waf(token)
     local expected = get_config("reloadToken", config.reloadToken)
     if expected and expected ~= "" and token ~= expected then
         ngx.log(ngx.ERR, "[WAF] reload rejected: invalid token")
+        record_config_reload("failure")
         return false, "invalid token"
     end
 
@@ -1179,17 +1302,22 @@ local function reload_waf(token)
     for _, t in ipairs{"url","args","post","cookie","user-agent","whiteurl","cmd","ssrf","pathtraversal","sensitivefile","webshell"} do load_rules(t) end
     load_ip_lists_if_changed()
     ngx.log(ngx.NOTICE, "[WAF] reload completed")
+    record_config_reload("success")
     return true
 end
 
 local function run_waf()
+    if ngx.ctx then
+        ngx.ctx.waf_start_time = ngx.now and ngx.now() or nil
+        ngx.ctx.waf_recorded_outcome = nil
+    end
     local ok, err = pcall(function()
         load_ip_lists_if_changed()
         load_all()
         validate_shared_dicts()
         apply_security_headers()
 
-        if whiteip() then return end
+        if whiteip() then record_waf_request("skip"); return end
         if blockip() then return end
 
         if whiteurl() then return end
@@ -1199,6 +1327,7 @@ local function run_waf()
         if pathtraversal() then return end
 
         if is_static_request() and get_config("static_skip", config.static_skip) == "light" then
+            record_waf_request("skip")
             return
         end
 
@@ -1213,9 +1342,12 @@ local function run_waf()
         if should_inspect_body(method) then
             if inspect_post_body(boundary) then return end
         end
+        record_waf_request("allow")
     end)
 
     if not ok then
+        record_waf_error("run")
+        record_waf_request("error")
         ngx.log(ngx.ERR, "[WAF] Error: ", err)
     end
 end

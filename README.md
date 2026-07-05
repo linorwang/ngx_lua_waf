@@ -53,8 +53,10 @@ http {
     # ... 原有配置保持不变 ...
 
     # ---------------- WAF 配置开始 ----------------
-    lua_shared_dict limit 256m;
+    lua_shared_dict limit 100m;
     lua_shared_dict waf_cache 50m;
+    # 可选：启用 Prometheus 指标时需要
+    lua_shared_dict prometheus_metrics 10m;
     lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua;;";
 
     init_by_lua_block {
@@ -112,6 +114,10 @@ contentSecurityPolicy = ""
 
 -- 可选：给热加载接口设置 token
 reloadToken = "change-me"
+
+-- 可选：Prometheus 指标，默认关闭
+prometheus = "off"
+prometheusMetricsDict = "prometheus_metrics"
 ```
 
 如需暴露热加载接口，建议只允许内网访问，并校验 `reloadToken`：
@@ -128,6 +134,60 @@ location = /waf/reload {
     }
 }
 ```
+
+### Prometheus 指标（可选）
+
+WAF 可以通过 `nginx-lua-prometheus` 直接在请求处理阶段记录低基数指标，不需要解析 Nginx access log 或 WAF 攻击日志。启用前先安装 `nginx-lua-prometheus`，并在 `http` 块中配置：
+
+```nginx
+lua_shared_dict prometheus_metrics 10m;
+```
+
+然后开启配置：
+
+```lua
+prometheus = "on"
+prometheusMetricsDict = "prometheus_metrics"
+```
+
+默认上报以下指标：
+
+```text
+waf_requests_total{outcome="allow|block|skip|error"}
+waf_blocks_total{reason="url|args|post|cookie|ua|cmd|ssrf|pathtraversal|sensitivefile|webshell|file_ext|ip_blocklist|cc|body_too_large"}
+waf_rule_matches_total{type="url|args|post|cookie|ua|cmd|ssrf|pathtraversal|sensitivefile|webshell|file_ext"}
+waf_cc_events_total{event="limit_exceeded|ban_set|ban_hit"}
+waf_body_rejections_total{reason="too_large|read_failed"}
+waf_errors_total{stage="run|redis|cache|regex|log_write|metrics"}
+waf_config_reload_total{result="success|failure"}
+waf_request_duration_seconds{outcome="allow|block|skip|error"}
+```
+
+不要把公网业务域名上的 `/metrics` 直接暴露出去。推荐单独监听本机或内网端口：
+
+```nginx
+server {
+    listen 127.0.0.1:9145;
+
+    location = /metrics {
+        access_log off;
+        content_by_lua_block {
+            require("metrics").collect()
+        }
+    }
+}
+```
+
+Prometheus 同机部署时可抓取：
+
+```yaml
+scrape_configs:
+  - job_name: waf
+    static_configs:
+      - targets: ["127.0.0.1:9145"]
+```
+
+如果 Prometheus 在其他机器，建议监听内网 IP，并用安全组、防火墙、VPN 或 `allow`/`deny` 只允许 Prometheus 服务器访问。
 
 ### 第四步：配置 Redis
 
@@ -384,6 +444,7 @@ redis-cli INCR waf:version:ip
 ngx_lua_waf/
 ├── config.lua          # 配置文件
 ├── waf.lua             # WAF 核心代码
+├── metrics.lua         # Prometheus 指标模块（可选）
 ├── redis.lua           # Redis 操作
 ├── cache.lua           # 缓存模块
 ├── init.lua            # 初始化脚本
@@ -428,6 +489,7 @@ ngx_lua_waf/
 - ✅ 本地缓存机制，减少 Redis 查询
 - ✅ IP 黑白名单实时生效（默认 1 秒内）
 - ✅ 详细的攻击日志
+- ✅ Prometheus 指标上报（可选）
 - ✅ 美观的拦截页面
 - ✅ 真实 IP 获取（支持 X-Forwarded-For 等头）
 - ✅ 受信任代理 IP 配置
@@ -485,6 +547,8 @@ ngx_lua_waf/
 | `alertThreshold` | 告警阈值（次数） | `100` |
 | `alertWindow` | 告警时间窗口（秒） | `60` |
 | `reloadToken` | 热重载 token | `""` |
+| `prometheus` | 是否启用 Prometheus 指标 | `off` |
+| `prometheusMetricsDict` | Prometheus 指标 shared dict 名称 | `prometheus_metrics` |
 
 ---
 

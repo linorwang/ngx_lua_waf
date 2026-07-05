@@ -56,6 +56,8 @@ alertEnabled="on"
 alertThreshold=100
 alertWindow=60
 reloadToken=nil
+prometheus="off"
+prometheusMetricsDict="prometheus_metrics"
 RuleParams={
     post={"post","webshell","pathtraversal","cmd","ssrf","sensitivefile"}
 }
@@ -186,6 +188,8 @@ local _M = {
     alertThreshold = alertThreshold,
     alertWindow = alertWindow,
     reloadToken = reloadToken,
+    prometheus = prometheus,
+    prometheusMetricsDict = prometheusMetricsDict,
     RuleParams = RuleParams,
     ipWhitelist = ipWhitelist,
     ipBlocklist = ipBlocklist,
